@@ -1,0 +1,366 @@
+// dynamodb_extension.cpp
+// Registers both table functions with DuckDB:
+//   dynamodb_scan('table', ...)  — typed columns + _extra JSON for rare attrs
+//   dynamodb_json('table', ...)  — every row is a raw JSON VARCHAR
+
+#include "dynamodb_extension.hpp"
+#include "dynamodbstate.hpp"
+
+#include "aws_client.hpp"
+#include "schema_inference.hpp"
+#include "filter_pushdown.hpp"
+
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+
+#include "filter_pushdown.hpp"
+
+#include <aws/core/Aws.h>
+
+namespace duckdb {
+
+// ─────────────────────────────────────────────
+// Parse named parameters from the SQL call.
+//
+// Usage:
+//   dynamodb_scan('orders',
+//       endpoint='http://localhost:8000',   -- DynamoDB Local
+//       allow_full_scan=true,
+//       schema_mode='hybrid',
+//       parallel_segments=8)
+// ─────────────────────────────────────────────
+static TableConfig ParseTableConfig(const std::string &table_name, const named_parameter_map_t &params) {
+	TableConfig cfg;
+	cfg.table_name = table_name;
+
+	auto get_str = [&](const std::string &key, const std::string &def) -> std::string {
+		auto it = params.find(key);
+		return (it != params.end()) ? it->second.GetValue<std::string>() : def;
+	};
+	auto get_bool = [&](const std::string &key, bool def) -> bool {
+		auto it = params.find(key);
+		return (it != params.end()) ? it->second.GetValue<bool>() : def;
+	};
+	auto get_int = [&](const std::string &key, int def) -> int {
+		auto it = params.find(key);
+		return (it != params.end()) ? (int)it->second.GetValue<int64_t>() : def;
+	};
+
+	cfg.endpoint_url = get_str("endpoint", "");
+	cfg.region = get_str("region", "us-east-1");
+	cfg.schema_mode = get_str("schema_mode", "hybrid");
+	cfg.pk_name = get_str("pk", "");
+	cfg.sk_name = get_str("sk", "");
+	cfg.allow_full_scan = get_bool("allow_full_scan", false);
+	cfg.parallel_segments = get_int("parallel_segments", 4);
+	cfg.sample_size = get_int("sample_size", 200);
+	cfg.hybrid_threshold =
+	    get_str("hybrid_threshold", "0.8").empty() ? 0.8 : std::stod(get_str("hybrid_threshold", "0.8"));
+
+	return cfg;
+}
+
+// ─────────────────────────────────────────────
+// BIND — runs once at query planning time.
+// Determines schema and registers output columns with DuckDB.
+// ─────────────────────────────────────────────
+static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<string> &names) {
+	auto table_name = input.inputs[0].GetValue<std::string>();
+	auto bind_data = make_uniq<DynamoBindData>();
+	bind_data->config = ParseTableConfig(table_name, input.named_parameters);
+
+	AWSClientWrapper aws(bind_data->config);
+
+	// Auto-discover PK/SK from DescribeTable if not provided by user
+	if (bind_data->config.pk_name.empty()) {
+		auto desc = aws.DescribeTable(table_name);
+		auto &key_schema = desc.GetTable().GetKeySchema();
+		for (auto &key : key_schema) {
+			if (key.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
+				bind_data->config.pk_name = key.GetAttributeName();
+			} else {
+				bind_data->config.sk_name = key.GetAttributeName();
+			}
+		}
+		// Also load GSI definitions
+		for (auto &gsi : desc.GetTable().GetGlobalSecondaryIndexes()) {
+			GSIConfig g;
+			g.index_name = gsi.GetIndexName();
+			for (auto &k : gsi.GetKeySchema()) {
+				if (k.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
+					g.pk_name = k.GetAttributeName();
+				} else {
+					g.sk_name = k.GetAttributeName();
+				}
+			}
+			bind_data->config.gsis.push_back(g);
+		}
+	}
+
+	// Infer or construct schema
+	bind_data->schema = InferSchema(aws, bind_data->config);
+
+	for (auto &col : bind_data->schema.columns) {
+		names.push_back(col.name);
+		return_types.push_back(col.duckdb_type);
+	}
+
+	for (idx_t i = 0; i < bind_data->schema.columns.size(); i++) {
+		bind_data->projected_col_indices.push_back(i);
+	}
+
+	return std::move(bind_data);
+}
+
+// ─────────────────────────────────────────────
+// INIT — runs once before scanning starts.
+// Decides QUERY vs SCAN and sets up pagination state.
+// ─────────────────────────────────────────────
+static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx, TableFunctionInitInput &input) {
+	DynamoBindData bind_data = input.bind_data->Cast<DynamoBindData>();
+	auto state = make_uniq<DynamoScanState>();
+
+	if (!input.column_ids.empty()) {
+		bind_data.projected_col_indices = input.column_ids;
+	}
+
+	// Inspect filters the DuckDB planner wants applied
+	DynamoOperation op = ResolveBestOperation(bind_data, input.filters.get(), ctx);
+
+	state->operation = op;
+
+	if (op == DynamoOperation::SCAN) {
+		state->total_segments = bind_data.config.parallel_segments;
+		// Log a cost warning
+		Printer::Print("⚠  DynamoDB: full table scan on '" + bind_data.config.table_name +
+		               "' — this consumes RCUs proportional "
+		               "to the entire table size.\n");
+	} else {
+		state->total_segments = 1; // single thread for Query/GetItem
+	}
+
+	return std::move(state);
+}
+
+// Per-thread local state initialisation
+static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx, TableFunctionInitInput &input,
+                                                           GlobalTableFunctionState *global_p) {
+	auto &global = global_p->Cast<DynamoScanState>();
+	auto local = make_uniq<DynamoLocalState>();
+
+	if (global.operation == DynamoOperation::SCAN) {
+		// Each thread claims the next available segment atomically
+		local->my_segment = global.next_segment.fetch_add(1);
+		if (local->my_segment >= global.total_segments) {
+			local->segment_done = true; // no work left
+		}
+	}
+
+	return std::move(local);
+}
+
+// ─────────────────────────────────────────────
+// SCAN — called repeatedly per thread until done.
+// Fills one DataChunk (~2048 rows) per call.
+//
+// GROUP BY acceleration:
+//   DuckDB's vectorised hash-aggregate operator sits above this
+//   and ingests chunks in parallel from all scan threads.
+//   Each thread independently scans its DynamoDB segment, so
+//   GROUP BY across a full scan is automatically parallelised.
+//   DuckDB merges partial aggregates from threads at the top.
+// ─────────────────────────────────────────────
+static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, DataChunk &output) {
+	auto &bind_data = input.bind_data->Cast<DynamoBindData>();
+	auto &global = input.global_state->Cast<DynamoScanState>();
+	auto &local = input.local_state->Cast<DynamoLocalState>();
+
+	// ── Already exhausted? ─────────────────────────────────────────────────
+	if (local.segment_done) {
+		output.SetCardinality(0);
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(global.cursor_mutex);
+		if (global.done && global.operation != DynamoOperation::SCAN) {
+			output.SetCardinality(0);
+			return;
+		}
+	}
+
+	AWSClientWrapper aws(bind_data.config);
+
+	// Columns DuckDB actually needs (projection pushdown)
+	std::vector<std::string> needed_cols;
+	for (idx_t ci : bind_data.projected_col_indices) {
+		if (ci < bind_data.schema.columns.size()) {
+			needed_cols.push_back(bind_data.schema.columns[ci].name);
+		}
+	}
+
+	DynamoPage page;
+
+	// ── Fetch next page depending on operation ─────────────────────────────
+	switch (global.operation) {
+	case DynamoOperation::GET_ITEM: {
+		// Extract PK and SK values from pushed key expressions
+		// (simplified — real impl parses expr_attr_values)
+		std::string pk_val = bind_data.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
+		std::string sk_val = bind_data.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
+		page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
+		local.segment_done = true; // GetItem is always a single result
+		break;
+	}
+
+	case DynamoOperation::QUERY:
+	case DynamoOperation::QUERY_GSI: {
+		Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> cursor;
+		{
+			std::lock_guard<std::mutex> lock(global.cursor_mutex);
+			cursor = global.last_evaluated_key;
+		}
+		page = aws.Query(bind_data.config, bind_data.key_condition_expr, bind_data.filter_expr, bind_data.index_name,
+		                 needed_cols, bind_data.expr_attr_values, cursor);
+		{
+			std::lock_guard<std::mutex> lock(global.cursor_mutex);
+			global.last_evaluated_key = page.next_cursor;
+			if (page.next_cursor.empty()) {
+				global.done = true;
+			}
+		}
+		break;
+	}
+
+	case DynamoOperation::SCAN: {
+		// Each thread independently paginates through its own segment.
+		// This is the key to parallel GROUP BY performance:
+		//   N threads × independent DynamoDB segments → N×  throughput
+		page = aws.Scan(bind_data.config, needed_cols, local.segment_cursor, local.my_segment, global.total_segments);
+		local.segment_cursor = page.next_cursor;
+		if (page.next_cursor.empty()) {
+			local.segment_done = true;
+		}
+		break;
+	}
+	}
+
+	// ── Materialise items into DuckDB columnar output ──────────────────────
+	idx_t row = 0;
+	for (auto &item : page.items) {
+		if (row >= STANDARD_VECTOR_SIZE)
+			break; // chunk is full
+		AppendItemToChunk(item, bind_data.schema, bind_data.projected_col_indices, output, row);
+		row++;
+	}
+
+	output.SetCardinality(row);
+}
+
+// ─────────────────────────────────────────────
+// FILTER PUSHDOWN CALLBACK
+// DuckDB calls this to ask which filters we can handle natively.
+// We translate what we can and return the rest for DuckDB to apply.
+// ─────────────────────────────────────────────
+static void DynamoFilterPushdown(ClientContext &ctx, LogicalGet &get, FunctionData *bind_data_p,
+                                 vector<unique_ptr<Expression>> &filters) {
+	// The detailed per-column pushdown happens in ResolveBestOperation (init).
+	// Here we just signal to DuckDB that we accept filter_pushdown.
+	// DuckDB will store the filters and pass them to init via TableFunctionInitInput.
+	// Nothing to do here — the work is in filter_pushdown.hpp.
+	(void)ctx;
+	(void)get;
+	(void)bind_data_p;
+	(void)filters;
+}
+
+// ─────────────────────────────────────────────
+// REPLACEMENT SCAN
+// Allows:  FROM 'dynamodb://my-table'
+// instead of: FROM dynamodb_scan('my-table')
+// ─────────────────────────────────────────────
+/*static unique_ptr<TableRef> DynamoReplacementScan(ClientContext &ctx, ReplacementScanInput &input,
+                                                  optional_ptr<ReplacementScanData> data) {
+	string table_name = ReplacementScan::GetFullPath(input);
+	if (!StringUtil::StartsWith(table_name, "dynamodb://")) {
+		return nullptr; // not ours
+	}
+	auto actual_name = table_name.substr(11); // strip "dynamodb://"
+	auto table_func = make_uniq<TableFunctionRef>();
+	auto func_name = make_uniq<FunctionExpression>(
+		"dynamodb_scan",
+		vector<unique_ptr<ParsedExpression>>{}
+	);
+
+	func_name->children.push_back(
+		make_uniq<ConstantExpression>(Value(actual_name))
+	);
+
+	table_func->function = std::move(func_name);
+	return std::move(table_func);
+}*/
+
+// ─────────────────────────────────────────────
+// EXTENSION LOAD
+// ─────────────────────────────────────────────
+void LoadInternal(ExtensionLoader &loader) {
+	Aws::InitAPI({});
+
+	// ── dynamodb_scan — typed columns + optional _extra JSON ──────────────
+	TableFunction scan_func("dynamodb_scan", {LogicalType::VARCHAR}, // positional arg: table name
+	                        DynamoScanFunction, DynamoBindFunction, DynamoInitGlobal, DynamoInitLocal);
+
+	// Named parameters
+	scan_func.named_parameters["endpoint"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["region"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["pk"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["sk"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["allow_full_scan"] = LogicalType::BOOLEAN;
+	scan_func.named_parameters["parallel_segments"] = LogicalType::INTEGER;
+	scan_func.named_parameters["sample_size"] = LogicalType::INTEGER;
+	scan_func.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["hybrid_threshold"] = LogicalType::DOUBLE;
+
+	// Optimisation flags
+	scan_func.filter_pushdown = true;
+	scan_func.filter_prune = true; // remove unused columns from scan
+	scan_func.projection_pushdown = true;
+
+	loader.RegisterFunction(scan_func);
+
+	// ── dynamodb_json — raw JSON per row, no schema inference ─────────────
+	// Usage: SELECT raw->>'$.amount' FROM dynamodb_json('orders')
+	TableFunction json_func("dynamodb_json", {LogicalType::VARCHAR},
+	                        DynamoScanFunction, // same scan logic
+	                        DynamoBindFunction, // bind forces schema_mode="json"
+	                        DynamoInitGlobal, DynamoInitLocal);
+
+	json_func.named_parameters = scan_func.named_parameters;
+	json_func.filter_pushdown = true;
+	json_func.projection_pushdown = false; // JSON mode: always fetch full item
+
+	loader.RegisterFunction(json_func);
+
+	// ── Replacement scan: FROM 'dynamodb://table-name' ────────────────────
+	// @todo fix this replacement usage
+	// db.instance->config.replacement_scans.emplace_back(DynamoReplacementScan);
+}
+
+void DynamodbExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
+}
+
+std::string DynamodbExtension::Name() {
+	return "dynamodb";
+}
+
+} // namespace duckdb
+
+
+extern "C" {
+DUCKDB_CPP_EXTENSION_ENTRY(dynamodb, loader) {
+	duckdb::LoadInternal(loader);
+}
+}

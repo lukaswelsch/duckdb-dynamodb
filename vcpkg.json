@@ -1,13 +1,9 @@
 {
         "dependencies": [
-                "openssl"
+                {
+                        "name": "aws-sdk-cpp",
+                        "features": ["dynamodb"]
+                }
         ],
-        "vcpkg-configuration": {
-                "overlay-ports": [
-                        "./extension-ci-tools/vcpkg_ports"
-                ],
-                "overlay-triplets": [
-                        "./extension-ci-tools/toolchains"
-                ]
-        }
+        "builtin-baseline": "84bab45d415d22042bd0b9081aea57f362da3f35"
 }
