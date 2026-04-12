@@ -5,9 +5,10 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 namespace duckdb {
+class AWSClientWrapper;
+enum class DynamoOperation;
 
 // ─────────────────────────────────────────────
 // GSI metadata declared by user or auto-detected
@@ -59,15 +60,11 @@ struct DynamoBindData : FunctionData {
     TableConfig config;
     SchemaInfo schema;
 	vector<idx_t> projected_col_indices;
+	std::string pk_value;
 
-    // Filters translated to DynamoDB expressions at init time
-    std::string key_condition_expr;
-    std::string filter_expr;
-    std::string index_name; // populated when routing through a GSI
-    std::unordered_map<std::string, std::string> expr_attr_names;
-    std::unordered_map<std::string, std::string> expr_attr_values;
+	shared_ptr<AWSClientWrapper> aws_client;
 
-    unique_ptr<FunctionData> Copy() const override {
+	unique_ptr<FunctionData> Copy() const override {
         return make_uniq<DynamoBindData>(*this);
     }
     bool Equals(const FunctionData &) const override { return false; }

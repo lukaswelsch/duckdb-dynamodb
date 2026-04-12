@@ -96,8 +96,8 @@ SchemaInfo InferSchema(AWSClientWrapper &aws,
 
     // ── Count attribute occurrence frequency ──────────────────────────────
     // attr_name → (appearance_count, observed_type)
-    std::unordered_map<std::string, int> attr_count;
-    std::unordered_map<std::string, LogicalType> attr_type;
+    std::map<std::string, int> attr_count;
+    std::map<std::string, LogicalType> attr_type;
 
     for (int i = 0; i < n; i++) {
         for (auto &[attr_name, attr_val] : items[i]) {
@@ -161,7 +161,8 @@ void AppendItemToChunk(
     DataChunk &output,
     idx_t row) {
 
-	for (idx_t out_idx = 0; out_idx < projected_col_indices.size(); out_idx++) {
+	idx_t output_count = MinValue<idx_t>(projected_col_indices.size(), output.ColumnCount());
+	for (idx_t out_idx = 0; out_idx < output_count; out_idx++) {
 		idx_t schema_idx = projected_col_indices[out_idx];
     	auto &col = schema.columns[schema_idx];
     	auto &vec = output.data[out_idx];

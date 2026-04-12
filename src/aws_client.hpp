@@ -48,7 +48,7 @@ public:
     // Used at bind time to discover PK/SK and GSI definitions automatically.
     Aws::DynamoDB::Model::DescribeTableResult DescribeTable(const std::string &table_name) {
         Aws::DynamoDB::Model::DescribeTableRequest req;
-        req.SetTableName(table_name);
+        req.SetTableName(table_name.c_str());
         auto outcome = client_->DescribeTable(req);
         if (!outcome.IsSuccess()) {
             throw std::runtime_error("DescribeTable failed: " +
@@ -65,6 +65,9 @@ public:
                     const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &start_key,
                     int segment_index,
                     int total_segments) {
+
+			fprintf(stderr, "DynamPage Aws wrapper scanning\n");
+
 
         Aws::DynamoDB::Model::ScanRequest req;
     	Aws::Map<Aws::String, Aws::String> expr_attr_names;
@@ -91,6 +94,11 @@ public:
                                      outcome.GetError().GetMessage());
         }
 
+    	fprintf(stderr, "DYNAMO SCAN: segment=%d/%d → %zu items returned, has_more=%s\n",
+			segment_index, total_segments,
+			outcome.GetResult().GetItems().size(),
+			outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
+
         DynamoPage page;
         page.items      = outcome.GetResult().GetItems();
         page.next_cursor = outcome.GetResult().GetLastEvaluatedKey(); // empty = done
@@ -104,6 +112,7 @@ public:
                      const std::string &index_name,         // may be empty
                      const std::vector<std::string> &projection_cols,
                      const std::unordered_map<std::string, std::string> &expr_attr_values,
+                     const std::unordered_map<std::string, std::string> &expr_attr_names_in,
                      const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &start_key) {
 
         Aws::DynamoDB::Model::QueryRequest req;
@@ -113,19 +122,22 @@ public:
         req.SetTableName(config.table_name);
         req.SetKeyConditionExpression(key_condition_expr);
 
-        if (!filter_expr.empty()) {
-            // Non-key conditions DynamoDB applies server-side AFTER key lookup
-            // (reduces network payload but still costs RCUs for scanned items)
-            req.SetFilterExpression(filter_expr);
-        }
+    	if (!index_name.empty()) {
+    		req.SetIndexName(index_name);
+    	}
 
-        if (!index_name.empty()) {
-            req.SetIndexName(index_name);
-        }
+    	for (auto it = expr_attr_names_in.begin(); it != expr_attr_names_in.end(); ++it) {
+    		expr_attr_names[it->first] = it->second;
+    	}
 
-        if (!projection_cols.empty()) {
-            req.SetProjectionExpression(BuildProjection(projection_cols, expr_attr_names));
-        }
+    	if (!proj.empty()) {
+    		req.SetProjectionExpression(proj);
+    	}
+
+    	if (!expr_attr_names.empty()) {
+    		req.SetExpressionAttributeNames(expr_attr_names);
+    	}
+
 
         // Bind :placeholder → value mappings
         for (auto &[k, v] : expr_attr_values) {
@@ -143,6 +155,11 @@ public:
             throw std::runtime_error("Query failed: " +
                                      outcome.GetError().GetMessage());
         }
+
+    	fprintf(stderr, "DYNAMO QUERY: key='%s' → %zu items returned, has_more=%s\n",
+				key_condition_expr.c_str(),
+				outcome.GetResult().GetItems().size(),
+				outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
 
         DynamoPage page;
         page.items       = outcome.GetResult().GetItems();
@@ -195,7 +212,7 @@ private:
     // Comma-separated projection expression from column names
 	static std::string BuildProjection(
 		const std::vector<std::string> &cols,
-		Aws::Map<Aws::String, Aws::String> &expr_attr_names) {  // ← populated as side effect
+		Aws::Map<Aws::String, Aws::String> &expr_attr_names) {
 
 		std::string expr;
 		for (const auto &col : cols) {
@@ -203,7 +220,7 @@ private:
 			if (!expr.empty()) expr += ", ";
 			std::string alias = "#proj_" + col;
 			expr += alias;
-			expr_attr_names[alias] = col;  // #proj_status → status
+			expr_attr_names[alias] = col;
 		}
 		return expr;
 	}

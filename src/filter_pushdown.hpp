@@ -1,32 +1,22 @@
-// filter_pushdown.hpp
-// Translates DuckDB filter expressions into DynamoDB
-// KeyConditionExpression / FilterExpression strings.
-//
-// Returns the subset of filters that were NOT pushed (DuckDB handles those).
-
 #pragma once
 
 #include "dynamodb_extension.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 
 namespace duckdb {
 
-// ─────────────────────────────────────────────
-// Result of attempting to push down a filter
-// ─────────────────────────────────────────────
 enum class PushdownResult {
-    PUSHED_PK,   // became a KeyConditionExpression on the primary key
-    PUSHED_SK,   // became a KeyConditionExpression on the sort key
-    PUSHED_GSI,  // became a KeyConditionExpression on a GSI key
-    PUSHED_FILTER, // became a FilterExpression (server-side, costs RCUs)
-    NOT_PUSHED,  // DuckDB keeps this one and applies it after scan
+    PUSHED_PK,
+    PUSHED_SK,
+    PUSHED_GSI,
+    PUSHED_FILTER,
+    NOT_PUSHED,
 };
 
-// ─────────────────────────────────────────────
-// Check if a column name is the table PK or SK
-// ─────────────────────────────────────────────
 static bool IsPKColumn(const std::string &col, const TableConfig &config) {
     return col == config.pk_name;
 }
@@ -47,8 +37,8 @@ static const GSIConfig *MatchGSI(const std::string &col, const TableConfig &conf
 // Convert DuckDB expression comparison type to DynamoDB operator string
 // ─────────────────────────────────────────────
 static std::string ComparisonToExpr(ExpressionType type,
-                                    const std::string &attr_ref,   // e.g. "#pk"
-                                    const std::string &val_ref) {  // e.g. ":pkval"
+                                    const std::string &attr_ref,
+                                    const std::string &val_ref) {
     switch (type) {
     case ExpressionType::COMPARE_EQUAL:
         return attr_ref + " = " + val_ref;
@@ -61,7 +51,7 @@ static std::string ComparisonToExpr(ExpressionType type,
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
         return attr_ref + " >= " + val_ref;
     default:
-        return ""; // unsupported → not pushed
+        return "";
     }
 }
 
@@ -69,12 +59,12 @@ static std::string ComparisonToExpr(ExpressionType type,
 // Core pushdown logic — processes one filter at a time.
 //
 // DuckDB calls this via the filter_pushdown callback.
-// We accumulate pushed expressions into bind_data and return
-// the filters DuckDB should keep (the unpushed ones).
+// We accumulate pushed expressions into bind_data and return the filters DuckDB should keep.
 // ─────────────────────────────────────────────
 PushdownResult TryPushFilter(const std::string &col_name,
                              const TableFilter &filter,
-                             DynamoBindData &bind_data) {
+                             const DynamoBindData &bind_data,
+                             DynamoScanState &state) {
 
     auto &config = bind_data.config;
 
@@ -94,48 +84,32 @@ PushdownResult TryPushFilter(const std::string &col_name,
     std::string expr = ComparisonToExpr(cf.comparison_type, attr_ref, val_ref);
     if (expr.empty()) return PushdownResult::NOT_PUSHED;
 
-    // Register the attribute name alias (handles reserved words automatically)
-    bind_data.expr_attr_names[attr_ref] = col_name;
-    // Register the value placeholder
-    bind_data.expr_attr_values[val_ref] = cf.constant.ToString();
+    state.expr_attr_names[attr_ref] = col_name;
+    state.expr_attr_values[val_ref] = cf.constant.ToString();
 
-    // ── PK exact match → KeyConditionExpression (mandatory for Query) ──────
     if (IsPKColumn(col_name, config) &&
         cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
-        bind_data.key_condition_expr = expr;
+        state.key_condition_expr = expr;
         return PushdownResult::PUSHED_PK;
     }
 
-    // ── SK range or equality → appended to KeyConditionExpression ──────────
     if (IsSKColumn(col_name, config)) {
-        if (!bind_data.key_condition_expr.empty()) {
-            bind_data.key_condition_expr += " AND " + expr;
+        if (!state.key_condition_expr.empty()) {
+            state.key_condition_expr += " AND " + expr;
         }
-        // If PK hasn't been pushed yet this becomes a FilterExpression instead
-        // (you can't query on SK alone without PK in DynamoDB)
         return PushdownResult::PUSHED_SK;
     }
-
-    // ── GSI partition key match → route to GSI ─────────────────────────────
+	
     if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
         const GSIConfig *gsi = MatchGSI(col_name, config);
         if (gsi) {
-            bind_data.index_name      = gsi->index_name;
-            bind_data.key_condition_expr = expr;
+            state.index_name      = gsi->index_name;
+            state.key_condition_expr = expr;
             return PushdownResult::PUSHED_GSI;
         }
     }
 
-    // ── Non-key attribute → DynamoDB FilterExpression ──────────────────────
-    // Note: DynamoDB applies this AFTER reading items, so it reduces network
-    // payload but does NOT reduce consumed RCUs. DuckDB can do this too but
-    // pushing it here saves bandwidth.
-    if (!bind_data.filter_expr.empty()) {
-        bind_data.filter_expr += " AND " + expr;
-    } else {
-        bind_data.filter_expr = expr;
-    }
-    return PushdownResult::PUSHED_FILTER;
+    return PushdownResult::NOT_PUSHED;
 }
 
 // ─────────────────────────────────────────────
@@ -144,10 +118,10 @@ PushdownResult TryPushFilter(const std::string &col_name,
 // Returns the operation type and leaves unpushed filters for DuckDB.
 // Called from DynamoInitFunction after the planner has handed us filters.
 // ─────────────────────────────────────────────
-DynamoOperation ResolveBestOperation(DynamoBindData &bind_data,
+DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data,
+									 DynamoScanState &state,
                                      const TableFilterSet *filters,
                                      ClientContext &ctx) {
-
     if (!filters || filters->filters.empty()) {
         // No predicates at all → must full scan
         if (!bind_data.config.allow_full_scan) {
@@ -163,9 +137,15 @@ DynamoOperation ResolveBestOperation(DynamoBindData &bind_data,
     bool has_gsi = false;
 
     for (auto &[col_idx, filter] : filters->filters) {
+    	idx_t schema_idx = col_idx;
+    	if (col_idx < state.projected_col_indices.size()) {
+    		schema_idx = state.projected_col_indices[col_idx];
+    	}
+
         // Resolve column index → column name using schema
-        std::string col_name = bind_data.schema.columns[col_idx].name;
-        PushdownResult r = TryPushFilter(col_name, *filter, bind_data);
+        std::string col_name = bind_data.schema.columns[schema_idx].name;
+
+        PushdownResult r = TryPushFilter(col_name, *filter, bind_data, state);
 
         if (r == PushdownResult::PUSHED_PK)  has_pk  = true;
         if (r == PushdownResult::PUSHED_GSI) has_gsi = true;
@@ -174,7 +154,7 @@ DynamoOperation ResolveBestOperation(DynamoBindData &bind_data,
     if (has_pk) {
         // Check if we also have an SK for a possible GetItem
         bool has_sk = !bind_data.config.sk_name.empty() &&
-                      bind_data.key_condition_expr.find("#" + bind_data.config.sk_name) != std::string::npos;
+                      state.key_condition_expr.find("#" + bind_data.config.sk_name) != std::string::npos;
 
         // GetItem is only possible for exact PK+SK equality (both present)
         // If we have PK=val AND SK=val → GetItem (cheapest)
@@ -197,12 +177,35 @@ DynamoOperation ResolveBestOperation(DynamoBindData &bind_data,
     return DynamoOperation::SCAN;
 }
 
-static void DynamoProjectionPushdown(ClientContext &ctx,
-									  LogicalGet &get,
-									  FunctionData *bind_data_p,
-									  vector<idx_t> &column_ids) {
-	auto &bind_data = bind_data_p->Cast<DynamoBindData>();
-	bind_data.projected_col_indices = column_ids;  // DuckDB tells us which cols it needs
+static bool IsPKEqualityFilter(const unique_ptr<Expression> &expr,
+								const TableConfig &config) {
+
+	fprintf(stderr, "is PK equlity filter called");
+
+	if (expr->GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
+		return false;
+	}
+	auto &cmp = expr->Cast<BoundComparisonExpression>();
+	// Left side must be a column reference
+	if (cmp.left->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
+		return false;
+	}
+	auto &col_ref = cmp.left->Cast<BoundColumnRefExpression>();
+	// Right side must be a constant
+	if (cmp.right->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		return false;
+	}
+
+	auto d = col_ref.GetName() == config.pk_name;
+	// Column must be the PK
+	return col_ref.GetName() == config.pk_name;
+}
+
+// Extract the constant value from a pk = 'value' expression
+static std::string ExtractPKValue(const unique_ptr<Expression> &expr) {
+	auto &cmp = expr->Cast<BoundComparisonExpression>();
+	auto &constant = cmp.right->Cast<BoundConstantExpression>();
+	return constant.value.ToString();
 }
 
 } // namespace duckdb

@@ -15,8 +15,6 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 
-#include "filter_pushdown.hpp"
-
 #include <aws/core/Aws.h>
 
 namespace duckdb {
@@ -72,11 +70,11 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 	auto bind_data = make_uniq<DynamoBindData>();
 	bind_data->config = ParseTableConfig(table_name, input.named_parameters);
 
-	AWSClientWrapper aws(bind_data->config);
+	bind_data->aws_client = make_shared_ptr<AWSClientWrapper>(bind_data->config);
 
 	// Auto-discover PK/SK from DescribeTable if not provided by user
 	if (bind_data->config.pk_name.empty()) {
-		auto desc = aws.DescribeTable(table_name);
+		auto desc = bind_data->aws_client->DescribeTable(table_name);
 		auto &key_schema = desc.GetTable().GetKeySchema();
 		for (auto &key : key_schema) {
 			if (key.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
@@ -101,7 +99,7 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 	}
 
 	// Infer or construct schema
-	bind_data->schema = InferSchema(aws, bind_data->config);
+	bind_data->schema = InferSchema(*(bind_data->aws_client), bind_data->config);
 
 	for (auto &col : bind_data->schema.columns) {
 		names.push_back(col.name);
@@ -120,26 +118,40 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 // Decides QUERY vs SCAN and sets up pagination state.
 // ─────────────────────────────────────────────
 static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx, TableFunctionInitInput &input) {
-	DynamoBindData bind_data = input.bind_data->Cast<DynamoBindData>();
+	const auto &bind_data  = input.bind_data->Cast<DynamoBindData>();
 	auto state = make_uniq<DynamoScanState>();
 
 	if (!input.column_ids.empty()) {
-		bind_data.projected_col_indices = input.column_ids;
+		state->projected_col_indices = vector<idx_t>(input.column_ids.begin(), input.column_ids.end());
+	} else {
+		for (idx_t i = 0; i < bind_data.schema.columns.size(); i++) {
+			state->projected_col_indices.push_back(i);
+		}
+	}
+
+	if (!bind_data.pk_value.empty()) {
+		state->key_condition_expr = "#" + bind_data.config.pk_name +
+									" = :" + bind_data.config.pk_name + "val";
+		state->expr_attr_names["#" + bind_data.config.pk_name] = bind_data.config.pk_name;
+		state->expr_attr_values[":" + bind_data.config.pk_name + "val"] = bind_data.pk_value;
+		state->operation = DynamoOperation::QUERY;
+		state->total_segments = 1;
+
+		return std::move(state);
 	}
 
 	// Inspect filters the DuckDB planner wants applied
-	DynamoOperation op = ResolveBestOperation(bind_data, input.filters.get(), ctx);
+	DynamoOperation op = ResolveBestOperation(bind_data, *state, input.filters.get(), ctx);
 
 	state->operation = op;
 
 	if (op == DynamoOperation::SCAN) {
 		state->total_segments = bind_data.config.parallel_segments;
-		// Log a cost warning
 		Printer::Print("⚠  DynamoDB: full table scan on '" + bind_data.config.table_name +
-		               "' — this consumes RCUs proportional "
-		               "to the entire table size.\n");
+					   "' — this consumes RCUs proportional "
+					   "to the entire table size.\n");
 	} else {
-		state->total_segments = 1; // single thread for Query/GetItem
+		state->total_segments = 1;
 	}
 
 	return std::move(state);
@@ -148,6 +160,7 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 // Per-thread local state initialisation
 static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx, TableFunctionInitInput &input,
                                                            GlobalTableFunctionState *global_p) {
+
 	auto &global = global_p->Cast<DynamoScanState>();
 	auto local = make_uniq<DynamoLocalState>();
 
@@ -155,7 +168,7 @@ static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx
 		// Each thread claims the next available segment atomically
 		local->my_segment = global.next_segment.fetch_add(1);
 		if (local->my_segment >= global.total_segments) {
-			local->segment_done = true; // no work left
+			local->segment_done = true;
 		}
 	}
 
@@ -178,6 +191,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	auto &global = input.global_state->Cast<DynamoScanState>();
 	auto &local = input.local_state->Cast<DynamoLocalState>();
 
+	fprintf(stderr, "DynamoScanState::DynamoScanFunction\n");
+
 	// ── Already exhausted? ─────────────────────────────────────────────────
 	if (local.segment_done) {
 		output.SetCardinality(0);
@@ -191,11 +206,11 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 		}
 	}
 
-	AWSClientWrapper aws(bind_data.config);
+	auto &aws = *(bind_data.aws_client);
 
 	// Columns DuckDB actually needs (projection pushdown)
 	std::vector<std::string> needed_cols;
-	for (idx_t ci : bind_data.projected_col_indices) {
+	for (idx_t ci : global.projected_col_indices) {
 		if (ci < bind_data.schema.columns.size()) {
 			needed_cols.push_back(bind_data.schema.columns[ci].name);
 		}
@@ -208,8 +223,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	case DynamoOperation::GET_ITEM: {
 		// Extract PK and SK values from pushed key expressions
 		// (simplified — real impl parses expr_attr_values)
-		std::string pk_val = bind_data.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
-		std::string sk_val = bind_data.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
+		std::string pk_val = global.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
+		std::string sk_val = global.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
 		page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
 		local.segment_done = true; // GetItem is always a single result
 		break;
@@ -222,8 +237,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 			std::lock_guard<std::mutex> lock(global.cursor_mutex);
 			cursor = global.last_evaluated_key;
 		}
-		page = aws.Query(bind_data.config, bind_data.key_condition_expr, bind_data.filter_expr, bind_data.index_name,
-		                 needed_cols, bind_data.expr_attr_values, cursor);
+		page = aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
+		                 needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
 		{
 			std::lock_guard<std::mutex> lock(global.cursor_mutex);
 			global.last_evaluated_key = page.next_cursor;
@@ -239,6 +254,7 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 		// This is the key to parallel GROUP BY performance:
 		//   N threads × independent DynamoDB segments → N×  throughput
 		page = aws.Scan(bind_data.config, needed_cols, local.segment_cursor, local.my_segment, global.total_segments);
+
 		local.segment_cursor = page.next_cursor;
 		if (page.next_cursor.empty()) {
 			local.segment_done = true;
@@ -252,28 +268,11 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	for (auto &item : page.items) {
 		if (row >= STANDARD_VECTOR_SIZE)
 			break; // chunk is full
-		AppendItemToChunk(item, bind_data.schema, bind_data.projected_col_indices, output, row);
+		AppendItemToChunk(item, bind_data.schema, global.projected_col_indices, output, row);
 		row++;
 	}
 
 	output.SetCardinality(row);
-}
-
-// ─────────────────────────────────────────────
-// FILTER PUSHDOWN CALLBACK
-// DuckDB calls this to ask which filters we can handle natively.
-// We translate what we can and return the rest for DuckDB to apply.
-// ─────────────────────────────────────────────
-static void DynamoFilterPushdown(ClientContext &ctx, LogicalGet &get, FunctionData *bind_data_p,
-                                 vector<unique_ptr<Expression>> &filters) {
-	// The detailed per-column pushdown happens in ResolveBestOperation (init).
-	// Here we just signal to DuckDB that we accept filter_pushdown.
-	// DuckDB will store the filters and pass them to init via TableFunctionInitInput.
-	// Nothing to do here — the work is in filter_pushdown.hpp.
-	(void)ctx;
-	(void)get;
-	(void)bind_data_p;
-	(void)filters;
 }
 
 // ─────────────────────────────────────────────
@@ -324,9 +323,24 @@ void LoadInternal(ExtensionLoader &loader) {
 	scan_func.named_parameters["hybrid_threshold"] = LogicalType::DOUBLE;
 
 	// Optimisation flags
-	scan_func.filter_pushdown = true;
-	scan_func.filter_prune = true; // remove unused columns from scan
+	scan_func.filter_prune = true;
 	scan_func.projection_pushdown = true;
+	scan_func.pushdown_complex_filter = [](ClientContext &ctx, LogicalGet &get,
+	FunctionData *bind_data_p, vector<unique_ptr<Expression>> &filters) {
+
+		auto &bind_data = bind_data_p->Cast<DynamoBindData>();
+		vector<unique_ptr<Expression>> remaining;
+
+		for (auto &filter : filters) {
+			if (IsPKEqualityFilter(filter, bind_data.config)) {
+				bind_data.pk_value = ExtractPKValue(filter);} else {
+				// Keep for DuckDB to apply vectorized
+				remaining.push_back(std::move(filter));
+			}
+		}
+		filters = std::move(remaining);
+	};
+
 
 	loader.RegisterFunction(scan_func);
 

@@ -1,0 +1,13 @@
+# name: test/sql/dynamodb.test
+# description: test dynamodb extension
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require dynamodb
+
+# Confirm the extension works
+query I
+SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE) WHERE status='CANCELLED';
+#SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE, pk=customerId) WHERE customerId='CUST-003';
+----
+true
