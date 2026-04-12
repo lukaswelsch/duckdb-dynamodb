@@ -1,4 +1,6 @@
 import boto3
+from decimal import Decimal
+
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -12,15 +14,31 @@ for table in dynamodb.tables.all():
 
 table = dynamodb.Table("orders")
 
+total_amount = 0.0
+total_count = 0
 response = table.scan()
-for item in response["Items"]:
-    print(item)
 
-response = dynamodb.describe_table(TableName="orders")
+while True:
+    for item in response.get("Items", []):
+        # Convert amount to float and add to total
+        total_count += 1
+        if "amount" in item:
+            amount = item["amount"]
 
-table = response["Table"]
+            # Handle DynamoDB Decimal type
+            if isinstance(amount, Decimal):
+                amount = float(amount)
+            else:
+                amount = float(amount)
 
-key_schema = table["KeySchema"]
-print("PRIMARY KEY:")
-for key in key_schema:
-    print(f"{key['KeyType']}: {key['AttributeName']}")
+            total_amount += amount
+
+    # Handle pagination (scan can return partial results)
+    if "LastEvaluatedKey" in response:
+        response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
+    else:
+        break
+
+print(f"Total amount: {total_amount}")
+print(f"Total count: {total_count}")
+

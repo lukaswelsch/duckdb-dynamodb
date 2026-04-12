@@ -166,10 +166,9 @@ static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx
 
 	if (global.operation == DynamoOperation::SCAN) {
 		// Each thread claims the next available segment atomically
-		local->my_segment = global.next_segment.fetch_add(1);
-		if (local->my_segment >= global.total_segments) {
-			local->segment_done = true;
-		}
+		local->current_segment = -1;
+		local->segment_done    = false;
+		return std::move(local);
 	}
 
 	return std::move(local);
@@ -191,20 +190,13 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	auto &global = input.global_state->Cast<DynamoScanState>();
 	auto &local = input.local_state->Cast<DynamoLocalState>();
 
-	fprintf(stderr, "DynamoScanState::DynamoScanFunction\n");
-
-	// ── Already exhausted? ─────────────────────────────────────────────────
-	if (local.segment_done) {
+	// Check if all consumed, check that the local buffer is also emptied
+	std::lock_guard<std::mutex> lock(global.cursor_mutex);
+	if (global.done && global.operation != DynamoOperation::SCAN) {
 		output.SetCardinality(0);
 		return;
 	}
-	{
-		std::lock_guard<std::mutex> lock(global.cursor_mutex);
-		if (global.done && global.operation != DynamoOperation::SCAN) {
-			output.SetCardinality(0);
-			return;
-		}
-	}
+
 
 	auto &aws = *(bind_data.aws_client);
 
@@ -232,19 +224,20 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 
 	case DynamoOperation::QUERY:
 	case DynamoOperation::QUERY_GSI: {
-		Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> cursor;
-		{
+		if (local.buffer_offset >= local.item_buffer.size()) {
+			Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> cursor;
 			std::lock_guard<std::mutex> lock(global.cursor_mutex);
-			cursor = global.last_evaluated_key;
-		}
-		page = aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
-		                 needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
-		{
-			std::lock_guard<std::mutex> lock(global.cursor_mutex);
-			global.last_evaluated_key = page.next_cursor;
-			if (page.next_cursor.empty()) {
-				global.done = true;
+			if (global.done) {
+				output.SetCardinality(0);
+				return;
 			}
+			cursor = global.last_evaluated_key;
+			DynamoPage local_page = aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
+						 needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
+			local.item_buffer   = std::move(local_page.items);
+			local.buffer_offset = 0;
+			global.last_evaluated_key = local_page.next_cursor;
+			if (local_page.next_cursor.empty()) global.done = true;
 		}
 		break;
 	}
@@ -253,11 +246,30 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 		// Each thread independently paginates through its own segment.
 		// This is the key to parallel GROUP BY performance:
 		//   N threads × independent DynamoDB segments → N×  throughput
-		page = aws.Scan(bind_data.config, needed_cols, local.segment_cursor, local.my_segment, global.total_segments);
+		while (local.buffer_offset >= local.item_buffer.size()) {
+			// Current segment exhausted — claim the next one
+			if (local.segment_done || local.current_segment == -1) {
+				int next = global.next_segment.fetch_add(1);
+				if (next >= global.total_segments) {
+					// All segments claimed — this thread is done
+					output.SetCardinality(0);
+					return;
+				}
+				local.current_segment = next;
+				local.segment_cursor  = {};
+				local.segment_done    = false;
+			}
 
-		local.segment_cursor = page.next_cursor;
-		if (page.next_cursor.empty()) {
-			local.segment_done = true;
+			DynamoPage local_page = aws.Scan(bind_data.config, needed_cols,
+									   local.segment_cursor,
+									   local.current_segment,
+									   global.total_segments);
+			local.item_buffer   = std::move(local_page.items);
+			local.buffer_offset = 0;
+			local.segment_cursor = local_page.next_cursor;
+			if (local_page.next_cursor.empty()) {
+				local.segment_done = true;
+			}
 		}
 		break;
 	}
@@ -265,11 +277,19 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 
 	// ── Materialise items into DuckDB columnar output ──────────────────────
 	idx_t row = 0;
-	for (auto &item : page.items) {
-		if (row >= STANDARD_VECTOR_SIZE)
-			break; // chunk is full
-		AppendItemToChunk(item, bind_data.schema, global.projected_col_indices, output, row);
+	while (row < STANDARD_VECTOR_SIZE && local.buffer_offset < local.item_buffer.size()) {
+		AppendItemToChunk(local.item_buffer[local.buffer_offset],
+						  bind_data.schema,
+						  global.projected_col_indices,
+						  output, row);
+		local.buffer_offset++;
 		row++;
+	}
+	output.SetCardinality(row);
+
+	// Signal EOF when buffer empty AND no more pages
+	if (row == 0) {
+		output.SetCardinality(0);
 	}
 
 	output.SetCardinality(row);

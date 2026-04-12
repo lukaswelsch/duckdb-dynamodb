@@ -180,8 +180,6 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data,
 static bool IsPKEqualityFilter(const unique_ptr<Expression> &expr,
 								const TableConfig &config) {
 
-	fprintf(stderr, "is PK equlity filter called");
-
 	if (expr->GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}

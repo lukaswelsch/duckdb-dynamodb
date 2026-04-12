@@ -50,9 +50,8 @@ struct DynamoLocalState : duckdb::LocalTableFunctionState {
 	std::vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> item_buffer;
 	idx_t buffer_offset = 0;
 
-	// Which segment this thread owns (SCAN mode)
-	int my_segment = -1;
 	Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> segment_cursor;
+	int current_segment = -1;
 	bool segment_done = false;
 };
 

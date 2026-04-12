@@ -66,9 +66,6 @@ public:
                     int segment_index,
                     int total_segments) {
 
-			fprintf(stderr, "DynamPage Aws wrapper scanning\n");
-
-
         Aws::DynamoDB::Model::ScanRequest req;
     	Aws::Map<Aws::String, Aws::String> expr_attr_names;
         req.SetTableName(config.table_name);
