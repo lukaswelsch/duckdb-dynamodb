@@ -1,8 +1,3 @@
-// dynamodb_extension.cpp
-// Registers both table functions with DuckDB:
-//   dynamodb_scan('table', ...)  — typed columns + _extra JSON for rare attrs
-//   dynamodb_json('table', ...)  — every row is a raw JSON VARCHAR
-
 #include "dynamodb_extension.hpp"
 #include "dynamodbstate.hpp"
 
@@ -24,7 +19,7 @@ namespace duckdb {
 //
 // Usage:
 //   dynamodb_scan('orders',
-//       endpoint='http://localhost:8000',   -- DynamoDB Local
+//       endpoint='http://localhost:8000',
 //       allow_full_scan=true,
 //       schema_mode='hybrid',
 //       parallel_segments=8)
@@ -161,8 +156,11 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx, TableFunctionInitInput &input,
                                                            GlobalTableFunctionState *global_p) {
 
+	const auto &bind_data = input.bind_data->Cast<DynamoBindData>();
 	auto &global = global_p->Cast<DynamoScanState>();
 	auto local = make_uniq<DynamoLocalState>();
+
+	local->aws_client = make_uniq<AWSClientWrapper>(bind_data.config);
 
 	if (global.operation == DynamoOperation::SCAN) {
 		// Each thread claims the next available segment atomically
@@ -191,14 +189,16 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	auto &local = input.local_state->Cast<DynamoLocalState>();
 
 	// Check if all consumed, check that the local buffer is also emptied
-	std::lock_guard<std::mutex> lock(global.cursor_mutex);
-	if (global.done && global.operation != DynamoOperation::SCAN) {
-		output.SetCardinality(0);
-		return;
+	if (global.operation != DynamoOperation::SCAN) {
+		std::lock_guard<std::mutex> lock(global.cursor_mutex);
+		if (global.done && local.buffer_offset >= local.item_buffer.size()) {
+			output.SetCardinality(0);
+			return;
+		}
 	}
 
 
-	auto &aws = *(bind_data.aws_client);
+	auto &aws = *(local.aws_client);
 
 	// Columns DuckDB actually needs (projection pushdown)
 	std::vector<std::string> needed_cols;

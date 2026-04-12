@@ -53,5 +53,7 @@ struct DynamoLocalState : duckdb::LocalTableFunctionState {
 	Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> segment_cursor;
 	int current_segment = -1;
 	bool segment_done = false;
+
+	std::unique_ptr<duckdb::AWSClientWrapper> aws_client;
 };
 
