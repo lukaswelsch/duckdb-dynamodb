@@ -113,11 +113,11 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 // Decides QUERY vs SCAN and sets up pagination state.
 // ─────────────────────────────────────────────
 static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx, TableFunctionInitInput &input) {
-	const auto &bind_data  = input.bind_data->Cast<DynamoBindData>();
+	const auto &bind_data = input.bind_data->Cast<DynamoBindData>();
 	auto state = make_uniq<DynamoScanState>();
 
 	if (!input.column_ids.empty()) {
-		state->projected_col_indices = vector<idx_t>(input.column_ids.begin(), input.column_ids.end());
+		state->projected_col_indices = vector<column_t>(input.column_ids.begin(), input.column_ids.end());
 	} else {
 		for (idx_t i = 0; i < bind_data.schema.columns.size(); i++) {
 			state->projected_col_indices.push_back(i);
@@ -125,8 +125,7 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 	}
 
 	if (!bind_data.pk_value.empty()) {
-		state->key_condition_expr = "#" + bind_data.config.pk_name +
-									" = :" + bind_data.config.pk_name + "val";
+		state->key_condition_expr = "#" + bind_data.config.pk_name + " = :" + bind_data.config.pk_name + "val";
 		state->expr_attr_names["#" + bind_data.config.pk_name] = bind_data.config.pk_name;
 		state->expr_attr_values[":" + bind_data.config.pk_name + "val"] = bind_data.pk_value;
 		state->operation = DynamoOperation::QUERY;
@@ -143,8 +142,8 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 	if (op == DynamoOperation::SCAN) {
 		state->total_segments = bind_data.config.parallel_segments;
 		Printer::Print("⚠  DynamoDB: full table scan on '" + bind_data.config.table_name +
-					   "' — this consumes RCUs proportional "
-					   "to the entire table size.\n");
+		               "' — this consumes RCUs proportional "
+		               "to the entire table size.\n");
 	} else {
 		state->total_segments = 1;
 	}
@@ -155,7 +154,6 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 // Per-thread local state initialisation
 static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx, TableFunctionInitInput &input,
                                                            GlobalTableFunctionState *global_p) {
-
 	const auto &bind_data = input.bind_data->Cast<DynamoBindData>();
 	auto &global = global_p->Cast<DynamoScanState>();
 	auto local = make_uniq<DynamoLocalState>();
@@ -165,7 +163,7 @@ static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx
 	if (global.operation == DynamoOperation::SCAN) {
 		// Each thread claims the next available segment atomically
 		local->current_segment = -1;
-		local->segment_done    = false;
+		local->segment_done = false;
 		return std::move(local);
 	}
 
@@ -196,7 +194,6 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 			return;
 		}
 	}
-
 
 	auto &aws = *(local.aws_client);
 
@@ -232,12 +229,14 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 				return;
 			}
 			cursor = global.last_evaluated_key;
-			DynamoPage local_page = aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
-						 needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
-			local.item_buffer   = std::move(local_page.items);
+			DynamoPage local_page =
+			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
+			              needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
+			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
 			global.last_evaluated_key = local_page.next_cursor;
-			if (local_page.next_cursor.empty()) global.done = true;
+			if (local_page.next_cursor.empty())
+				global.done = true;
 		}
 		break;
 	}
@@ -256,15 +255,13 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 					return;
 				}
 				local.current_segment = next;
-				local.segment_cursor  = {};
-				local.segment_done    = false;
+				local.segment_cursor = {};
+				local.segment_done = false;
 			}
 
-			DynamoPage local_page = aws.Scan(bind_data.config, needed_cols,
-									   local.segment_cursor,
-									   local.current_segment,
-									   global.total_segments);
-			local.item_buffer   = std::move(local_page.items);
+			DynamoPage local_page = aws.Scan(bind_data.config, needed_cols, local.segment_cursor, local.current_segment,
+			                                 global.total_segments);
+			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
 			local.segment_cursor = local_page.next_cursor;
 			if (local_page.next_cursor.empty()) {
@@ -278,10 +275,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	// ── Materialise items into DuckDB columnar output ──────────────────────
 	idx_t row = 0;
 	while (row < STANDARD_VECTOR_SIZE && local.buffer_offset < local.item_buffer.size()) {
-		AppendItemToChunk(local.item_buffer[local.buffer_offset],
-						  bind_data.schema,
-						  global.projected_col_indices,
-						  output, row);
+		AppendItemToChunk(local.item_buffer[local.buffer_offset], bind_data.schema, global.projected_col_indices,
+		                  output, row);
 		local.buffer_offset++;
 		row++;
 	}
@@ -302,23 +297,23 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 // ─────────────────────────────────────────────
 /*static unique_ptr<TableRef> DynamoReplacementScan(ClientContext &ctx, ReplacementScanInput &input,
                                                   optional_ptr<ReplacementScanData> data) {
-	string table_name = ReplacementScan::GetFullPath(input);
-	if (!StringUtil::StartsWith(table_name, "dynamodb://")) {
-		return nullptr; // not ours
-	}
-	auto actual_name = table_name.substr(11); // strip "dynamodb://"
-	auto table_func = make_uniq<TableFunctionRef>();
-	auto func_name = make_uniq<FunctionExpression>(
-		"dynamodb_scan",
-		vector<unique_ptr<ParsedExpression>>{}
-	);
+    string table_name = ReplacementScan::GetFullPath(input);
+    if (!StringUtil::StartsWith(table_name, "dynamodb://")) {
+        return nullptr; // not ours
+    }
+    auto actual_name = table_name.substr(11); // strip "dynamodb://"
+    auto table_func = make_uniq<TableFunctionRef>();
+    auto func_name = make_uniq<FunctionExpression>(
+        "dynamodb_scan",
+        vector<unique_ptr<ParsedExpression>>{}
+    );
 
-	func_name->children.push_back(
-		make_uniq<ConstantExpression>(Value(actual_name))
-	);
+    func_name->children.push_back(
+        make_uniq<ConstantExpression>(Value(actual_name))
+    );
 
-	table_func->function = std::move(func_name);
-	return std::move(table_func);
+    table_func->function = std::move(func_name);
+    return std::move(table_func);
 }*/
 
 // ─────────────────────────────────────────────
@@ -345,22 +340,21 @@ void LoadInternal(ExtensionLoader &loader) {
 	// Optimisation flags
 	scan_func.filter_prune = true;
 	scan_func.projection_pushdown = true;
-	scan_func.pushdown_complex_filter = [](ClientContext &ctx, LogicalGet &get,
-	FunctionData *bind_data_p, vector<unique_ptr<Expression>> &filters) {
-
+	scan_func.pushdown_complex_filter = [](ClientContext &ctx, LogicalGet &get, FunctionData *bind_data_p,
+	                                       vector<unique_ptr<Expression>> &filters) {
 		auto &bind_data = bind_data_p->Cast<DynamoBindData>();
 		vector<unique_ptr<Expression>> remaining;
 
 		for (auto &filter : filters) {
 			if (IsPKEqualityFilter(filter, bind_data.config)) {
-				bind_data.pk_value = ExtractPKValue(filter);} else {
+				bind_data.pk_value = ExtractPKValue(filter);
+			} else {
 				// Keep for DuckDB to apply vectorized
 				remaining.push_back(std::move(filter));
 			}
 		}
 		filters = std::move(remaining);
 	};
-
 
 	loader.RegisterFunction(scan_func);
 
@@ -391,7 +385,6 @@ std::string DynamodbExtension::Name() {
 }
 
 } // namespace duckdb
-
 
 extern "C" {
 DUCKDB_CPP_EXTENSION_ENTRY(dynamodb, loader) {

@@ -3,14 +3,13 @@
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <mutex>
 
-
 namespace duckdb {
 
 enum class DynamoOperation {
-	GET_ITEM,   // exact PK+SK lookup
-	QUERY,      // PK (+ optional SK range)
-	QUERY_GSI,  // Query routed through a GSI
-	SCAN,       // full table scan — requires allow_full_scan=true
+	GET_ITEM,  // exact PK+SK lookup
+	QUERY,     // PK (+ optional SK range)
+	QUERY_GSI, // Query routed through a GSI
+	SCAN,      // full table scan — requires allow_full_scan=true
 };
 
 }
@@ -25,7 +24,7 @@ struct DynamoScanState : duckdb::GlobalTableFunctionState {
 
 	// Parallel scan bookkeeping (SCAN mode only)
 	int total_segments = 1;
-	std::atomic<int> next_segment{0}; // threads claim segments atomically
+	std::atomic<int> next_segment {0}; // threads claim segments atomically
 
 	// For QUERY/QUERY_GSI: single pagination cursor (single thread)
 	Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> last_evaluated_key;
@@ -39,7 +38,9 @@ struct DynamoScanState : duckdb::GlobalTableFunctionState {
 
 	std::string pk_value;
 
-	idx_t MaxThreads() const override { return (idx_t)total_segments; }
+	idx_t MaxThreads() const override {
+		return (idx_t)total_segments;
+	}
 };
 
 // ─────────────────────────────────────────────
@@ -56,4 +57,3 @@ struct DynamoLocalState : duckdb::LocalTableFunctionState {
 
 	std::unique_ptr<duckdb::AWSClientWrapper> aws_client;
 };
-
