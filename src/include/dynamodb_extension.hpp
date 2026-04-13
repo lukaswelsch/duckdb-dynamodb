@@ -59,7 +59,7 @@ struct TableConfig {
 struct DynamoBindData : FunctionData {
 	TableConfig config;
 	SchemaInfo schema;
-	vector<idx_t> projected_col_indices;
+	vector<column_t> projected_col_indices;
 	std::string pk_value;
 
 	shared_ptr<AWSClientWrapper> aws_client;

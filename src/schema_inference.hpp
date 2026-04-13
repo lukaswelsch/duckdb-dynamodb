@@ -10,7 +10,6 @@
 #include "dynamodb_extension.hpp"
 #include "aws_client.hpp"
 #include <aws/dynamodb/model/AttributeValue.h>
-#include <unordered_map>
 #include <string>
 
 namespace duckdb {

@@ -20,7 +20,7 @@ struct DynamoScanState : duckdb::GlobalTableFunctionState {
 	duckdb::DynamoOperation operation;
 	bool done = false;
 
-	duckdb::vector<unsigned long long> projected_col_indices;
+	duckdb::vector<duckdb::column_t> projected_col_indices;
 
 	// Parallel scan bookkeeping (SCAN mode only)
 	int total_segments = 1;

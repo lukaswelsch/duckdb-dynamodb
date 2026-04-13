@@ -205,16 +205,16 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 		}
 	}
 
-	DynamoPage page;
-
 	// ── Fetch next page depending on operation ─────────────────────────────
+	// @todo check why this function isn't called
 	switch (global.operation) {
 	case DynamoOperation::GET_ITEM: {
 		// Extract PK and SK values from pushed key expressions
 		// (simplified — real impl parses expr_attr_values)
 		std::string pk_val = global.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
 		std::string sk_val = global.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
-		page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
+		DynamoPage local_page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
+		local.item_buffer = std::move(local_page.items);
 		local.segment_done = true; // GetItem is always a single result
 		break;
 	}
