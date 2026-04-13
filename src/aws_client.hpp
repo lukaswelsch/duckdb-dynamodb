@@ -137,6 +137,12 @@ public:
 		if (!start_key.empty()) {
 			req.SetExclusiveStartKey(start_key);
 		}
+		std::cout << "Table: " << req.GetTableName() << std::endl;
+		std::cout << "Index: " << req.GetIndexName() << std::endl;
+		std::cout << "KeyConditionExpression: "
+				  << req.GetKeyConditionExpression() << std::endl;
+		std::cout << "FilterExpression: "
+				  << req.GetFilterExpression() << std::endl;
 
 		auto outcome = client_->Query(req);
 		if (!outcome.IsSuccess()) {

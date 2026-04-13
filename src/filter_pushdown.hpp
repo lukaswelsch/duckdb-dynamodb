@@ -64,6 +64,8 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
                              DynamoScanState &state) {
 	auto &config = bind_data.config;
 
+	fprintf(stderr, "Trypushfilter \n");
+
 	// Only ConstantFilter is safe to push (column OP constant)
 	// ConjunctionFilter (AND/OR) is handled recursively by DuckDB
 	if (filter.filter_type != TableFilterType::CONSTANT_COMPARISON) {
@@ -97,6 +99,7 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 	}
 
 	if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
+		fprintf(stderr, "MatchGSI (%s) \n", col_name.c_str());
 		const GSIConfig *gsi = MatchGSI(col_name, config);
 		if (gsi) {
 			state.index_name = gsi->index_name;
@@ -117,6 +120,7 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScanState &state,
                                      const TableFilterSet *filters, ClientContext &ctx) {
 	if (!filters || filters->filters.empty()) {
+		fprintf(stderr, "No Filter \n");
 		// No predicates at all → must full scan
 		if (!bind_data.config.allow_full_scan) {
 			throw InvalidInputException("Query on '%s' requires a full table scan. "
@@ -173,7 +177,8 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScan
 	return DynamoOperation::SCAN;
 }
 
-static bool IsPKEqualityFilter(const unique_ptr<Expression> &expr, const TableConfig &config) {
+
+static bool isEqualityFilter(const unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}
@@ -182,15 +187,46 @@ static bool IsPKEqualityFilter(const unique_ptr<Expression> &expr, const TableCo
 	if (cmp.left->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
 		return false;
 	}
-	auto &col_ref = cmp.left->Cast<BoundColumnRefExpression>();
+
 	// Right side must be a constant
 	if (cmp.right->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 		return false;
 	}
 
-	auto d = col_ref.GetName() == config.pk_name;
-	// Column must be the PK
-	return col_ref.GetName() == config.pk_name;
+	return true;
+}
+
+static std::string GetPKColname(const unique_ptr<Expression> &expr) {
+	if (isEqualityFilter(expr)) {
+		auto &cmp = expr->Cast<BoundComparisonExpression>();
+		auto &col_ref = cmp.left->Cast<BoundColumnRefExpression>();
+
+		auto col_name = col_ref.GetName();
+
+		return col_name;
+	}
+
+	return "";
+}
+
+static bool IsGSIFilter(const unique_ptr<Expression> &expr, const TableConfig &config) {
+	if (isEqualityFilter(expr)) {
+		auto &cmp = expr->Cast<BoundComparisonExpression>();
+		auto &col_ref = cmp.left->Cast<BoundColumnRefExpression>();
+
+		auto col_name = col_ref.GetName();
+
+		// Find GSI value
+		bool is_gsi_pk = std::any_of(config.gsis.begin(), config.gsis.end(),
+		[&col_name](const GSIConfig& gsi) {
+			return gsi.pk_name == col_name;
+		});
+
+		// Column must be PK
+		return is_gsi_pk;
+	}
+	return false;
+
 }
 
 // Extract the constant value from a pk = 'value' expression

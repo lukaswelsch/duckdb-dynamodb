@@ -17,6 +17,7 @@ struct GSIConfig {
 	std::string index_name;
 	std::string pk_name;
 	std::string sk_name; // optional
+	std::string gsi_value;
 };
 
 // ─────────────────────────────────────────────

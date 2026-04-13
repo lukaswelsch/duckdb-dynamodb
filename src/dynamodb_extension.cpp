@@ -89,6 +89,7 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 					g.sk_name = k.GetAttributeName();
 				}
 			}
+			fprintf(stderr, "Detected GSI pk: %s, sk: %s", g.pk_name.c_str(), g.sk_name.c_str());
 			bind_data->config.gsis.push_back(g);
 		}
 	}
@@ -122,6 +123,17 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 		for (idx_t i = 0; i < bind_data.schema.columns.size(); i++) {
 			state->projected_col_indices.push_back(i);
 		}
+	}
+
+	auto gsi = bind_data.config.gsis[0];
+	if (!gsi.gsi_value.empty()) {
+		state->key_condition_expr = "#" + gsi.pk_name + " = :" + gsi.pk_name + "val";
+		state->expr_attr_names["#" + gsi.pk_name] = gsi.pk_name;
+		state->expr_attr_values[":" + gsi.pk_name + "val"] = gsi.gsi_value;
+		state->operation = DynamoOperation::QUERY_GSI;
+		state->total_segments = 1;
+
+		return std::move(state);
 	}
 
 	if (!bind_data.pk_value.empty()) {
@@ -221,6 +233,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 
 	case DynamoOperation::QUERY:
 	case DynamoOperation::QUERY_GSI: {
+		fprintf(stderr, "QUERY_GSI \n");
+
 		if (local.buffer_offset >= local.item_buffer.size()) {
 			Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> cursor;
 			std::lock_guard<std::mutex> lock(global.cursor_mutex);
@@ -230,7 +244,7 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 			}
 			cursor = global.last_evaluated_key;
 			DynamoPage local_page =
-			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
+			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, bind_data.config.gsis[0].index_name,
 			              needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
 			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
@@ -346,9 +360,29 @@ void LoadInternal(ExtensionLoader &loader) {
 		vector<unique_ptr<Expression>> remaining;
 
 		for (auto &filter : filters) {
-			if (IsPKEqualityFilter(filter, bind_data.config)) {
+			if (GetPKColname(filter) == bind_data.config.pk_name) {
 				bind_data.pk_value = ExtractPKValue(filter);
-			} else {
+			} else if (IsGSIFilter(filter, bind_data.config)) {
+				bind_data.pk_value = ExtractPKValue(filter);
+				fprintf(stderr, "isgsifilter\n");
+				fprintf(stderr, "%s \n", filter->GetName().c_str());
+				auto pk_name = GetPKColname(filter);
+				auto pk_value = ExtractPKValue(filter);
+
+				// set the GSI value
+				auto it = std::find_if(bind_data.config.gsis.begin(),
+									   bind_data.config.gsis.end(),
+					[&pk_name](GSIConfig& gsi) {
+						return gsi.pk_name == pk_name;
+					});
+
+				if (it != bind_data.config.gsis.end()) {
+					it->gsi_value = pk_value;
+				}
+			}
+			else {
+				fprintf(stderr, "filtering remaining\n");
+				fprintf(stderr, "%s \n", filter->GetName().c_str());
 				// Keep for DuckDB to apply vectorized
 				remaining.push_back(std::move(filter));
 			}
