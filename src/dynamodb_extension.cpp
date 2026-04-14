@@ -125,23 +125,24 @@ static unique_ptr<GlobalTableFunctionState> DynamoInitGlobal(ClientContext &ctx,
 		}
 	}
 
-	auto gsi = bind_data.config.gsis[0];
-	if (!gsi.gsi_value.empty()) {
-		state->key_condition_expr = "#" + gsi.pk_name + " = :" + gsi.pk_name + "val";
-		state->expr_attr_names["#" + gsi.pk_name] = gsi.pk_name;
-		state->expr_attr_values[":" + gsi.pk_name + "val"] = gsi.gsi_value;
-		state->operation = DynamoOperation::QUERY_GSI;
-		state->total_segments = 1;
-
-		return std::move(state);
-	}
-
 	if (!bind_data.pk_value.empty()) {
 		state->key_condition_expr = "#" + bind_data.config.pk_name + " = :" + bind_data.config.pk_name + "val";
 		state->expr_attr_names["#" + bind_data.config.pk_name] = bind_data.config.pk_name;
 		state->expr_attr_values[":" + bind_data.config.pk_name + "val"] = bind_data.pk_value;
 		state->operation = DynamoOperation::QUERY;
 		state->total_segments = 1;
+
+		return std::move(state);
+	}
+
+	if (!bind_data.config.gsis.empty() && !bind_data.config.gsis[0].gsi_value.empty()) {
+		auto &gsi = bind_data.config.gsis[0];
+		state->key_condition_expr = "#" + gsi.pk_name + " = :" + gsi.pk_name + "val";
+		state->expr_attr_names["#" + gsi.pk_name] = gsi.pk_name;
+		state->expr_attr_values[":" + gsi.pk_name + "val"] = gsi.gsi_value;
+		state->operation = DynamoOperation::QUERY_GSI;
+		state->total_segments = 1;
+		state->index_name = gsi.index_name;
 
 		return std::move(state);
 	}
@@ -244,7 +245,7 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 			}
 			cursor = global.last_evaluated_key;
 			DynamoPage local_page =
-			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, bind_data.config.gsis[0].index_name,
+			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
 			              needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
 			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
@@ -355,39 +356,42 @@ void LoadInternal(ExtensionLoader &loader) {
 	scan_func.filter_prune = true;
 	scan_func.projection_pushdown = true;
 	scan_func.pushdown_complex_filter = [](ClientContext &ctx, LogicalGet &get, FunctionData *bind_data_p,
-	                                       vector<unique_ptr<Expression>> &filters) {
+									   vector<unique_ptr<Expression>> &filters) {
+		/*
+		*    if pk_filter is set then: return filters without pk_filter
+		*    if we have a gsi filter: return filters without the first gsi_filter
+		*    else return all filters
+		 */
 		auto &bind_data = bind_data_p->Cast<DynamoBindData>();
-		vector<unique_ptr<Expression>> remaining;
+		int remove_idx = -1;
 
-		for (auto &filter : filters) {
+		for (int i = 0; i < (int)filters.size(); i++) {
+			auto &filter = filters[i];
 			if (GetPKColname(filter) == bind_data.config.pk_name) {
+				std::cout << filter->ToString() << std::endl;
 				bind_data.pk_value = ExtractPKValue(filter);
+				remove_idx = i;
 			} else if (IsGSIFilter(filter, bind_data.config)) {
-				bind_data.pk_value = ExtractPKValue(filter);
-				fprintf(stderr, "isgsifilter\n");
-				fprintf(stderr, "%s \n", filter->GetName().c_str());
 				auto pk_name = GetPKColname(filter);
-				auto pk_value = ExtractPKValue(filter);
-
-				// set the GSI value
-				auto it = std::find_if(bind_data.config.gsis.begin(),
-									   bind_data.config.gsis.end(),
-					[&pk_name](GSIConfig& gsi) {
-						return gsi.pk_name == pk_name;
-					});
-
+				auto it = std::find_if(bind_data.config.gsis.begin(), bind_data.config.gsis.end(),
+					[&pk_name](GSIConfig &gsi) { return gsi.pk_name == pk_name; });
 				if (it != bind_data.config.gsis.end()) {
-					it->gsi_value = pk_value;
+					it->gsi_value = ExtractPKValue(filter);
+				}
+				if (remove_idx == -1) {
+					remove_idx = i;
 				}
 			}
-			else {
-				fprintf(stderr, "filtering remaining\n");
-				fprintf(stderr, "%s \n", filter->GetName().c_str());
-				// Keep for DuckDB to apply vectorized
-				remaining.push_back(std::move(filter));
-			}
 		}
-		filters = std::move(remaining);
+
+		if (remove_idx != -1) {
+			filters.erase(filters.begin() + remove_idx);
+		}
+
+		for (auto &filter : filters) {
+			std::cout << "REMAINING----------" << std::endl;
+			std::cout << filter->ToString() << std::endl;
+		}
 	};
 
 	loader.RegisterFunction(scan_func);
