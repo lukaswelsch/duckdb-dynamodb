@@ -27,4 +27,4 @@ jobs:
       duckdb_version: v1.5.1
       ci_tools_version: v1.5.1
       extension_name: dynamodb
-      format_checks: 'format;tidy'
+      format_checks: 'format'

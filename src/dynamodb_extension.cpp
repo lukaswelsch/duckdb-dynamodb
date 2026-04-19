@@ -42,7 +42,6 @@ static TableConfig ParseTableConfig(const std::string &table_name, const named_p
 	};
 
 	cfg.endpoint_url = get_str("endpoint", "");
-	cfg.region = get_str("region", "us-east-1");
 	cfg.schema_mode = get_str("schema_mode", "hybrid");
 	cfg.pk_name = get_str("pk", "");
 	cfg.sk_name = get_str("sk", "");
@@ -51,6 +50,7 @@ static TableConfig ParseTableConfig(const std::string &table_name, const named_p
 	cfg.sample_size = get_int("sample_size", 200);
 	cfg.hybrid_threshold =
 	    get_str("hybrid_threshold", "0.8").empty() ? 0.8 : std::stod(get_str("hybrid_threshold", "0.8"));
+	cfg.secret_name = get_str("secret_name", "");
 
 	return cfg;
 }
@@ -63,9 +63,12 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 	auto table_name = input.inputs[0].GetValue<std::string>();
 	auto bind_data = make_uniq<DynamoBindData>();
-	bind_data->config = ParseTableConfig(table_name, input.named_parameters);
 
-	bind_data->aws_client = make_shared_ptr<AWSClientWrapper>(bind_data->config);
+	auto table_config = ParseTableConfig(table_name, input.named_parameters);;
+	bind_data->config = ParseTableConfig(table_name, input.named_parameters);
+	bind_data->secret_config = LoadDynamoSecret(ctx, table_config.secret_name);
+
+	bind_data->aws_client = make_shared_ptr<AWSClientWrapper>(bind_data->config, bind_data->secret_config);
 
 	// Auto-discover PK/SK from DescribeTable if not provided by user
 	if (bind_data->config.pk_name.empty()) {
@@ -171,7 +174,7 @@ static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx
 	auto &global = global_p->Cast<DynamoScanState>();
 	auto local = make_uniq<DynamoLocalState>();
 
-	local->aws_client = make_uniq<AWSClientWrapper>(bind_data.config);
+	local->aws_client = make_uniq<AWSClientWrapper>(bind_data.config, bind_data.secret_config);
 
 	if (global.operation == DynamoOperation::SCAN) {
 		// Each thread claims the next available segment atomically
@@ -234,8 +237,6 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 
 	case DynamoOperation::QUERY:
 	case DynamoOperation::QUERY_GSI: {
-		fprintf(stderr, "QUERY_GSI \n");
-
 		if (local.buffer_offset >= local.item_buffer.size()) {
 			Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> cursor;
 			std::lock_guard<std::mutex> lock(global.cursor_mutex);
@@ -305,45 +306,18 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	output.SetCardinality(row);
 }
 
-// ─────────────────────────────────────────────
-// REPLACEMENT SCAN
-// Allows:  FROM 'dynamodb://my-table'
-// instead of: FROM dynamodb_scan('my-table')
-// ─────────────────────────────────────────────
-/*static unique_ptr<TableRef> DynamoReplacementScan(ClientContext &ctx, ReplacementScanInput &input,
-                                                  optional_ptr<ReplacementScanData> data) {
-    string table_name = ReplacementScan::GetFullPath(input);
-    if (!StringUtil::StartsWith(table_name, "dynamodb://")) {
-        return nullptr; // not ours
-    }
-    auto actual_name = table_name.substr(11); // strip "dynamodb://"
-    auto table_func = make_uniq<TableFunctionRef>();
-    auto func_name = make_uniq<FunctionExpression>(
-        "dynamodb_scan",
-        vector<unique_ptr<ParsedExpression>>{}
-    );
-
-    func_name->children.push_back(
-        make_uniq<ConstantExpression>(Value(actual_name))
-    );
-
-    table_func->function = std::move(func_name);
-    return std::move(table_func);
-}*/
 
 // ─────────────────────────────────────────────
 // EXTENSION LOAD
 // ─────────────────────────────────────────────
 void LoadInternal(ExtensionLoader &loader) {
-	Aws::InitAPI({});
-
 	// ── dynamodb_scan — typed columns + optional _extra JSON ──────────────
 	TableFunction scan_func("dynamodb_scan", {LogicalType::VARCHAR}, // positional arg: table name
 	                        DynamoScanFunction, DynamoBindFunction, DynamoInitGlobal, DynamoInitLocal);
 
 	// Named parameters
 	scan_func.named_parameters["endpoint"] = LogicalType::VARCHAR;
-	scan_func.named_parameters["region"] = LogicalType::VARCHAR;
+	scan_func.named_parameters["secret_name"] = LogicalType::VARCHAR;
 	scan_func.named_parameters["pk"] = LogicalType::VARCHAR;
 	scan_func.named_parameters["sk"] = LogicalType::VARCHAR;
 	scan_func.named_parameters["allow_full_scan"] = LogicalType::BOOLEAN;
@@ -409,9 +383,24 @@ void LoadInternal(ExtensionLoader &loader) {
 
 	loader.RegisterFunction(json_func);
 
-	// ── Replacement scan: FROM 'dynamodb://table-name' ────────────────────
-	// @todo fix this replacement usage
-	// db.instance->config.replacement_scans.emplace_back(DynamoReplacementScan);
+
+	// Register Secrets for dynamodb
+	SecretType secret_type;
+	secret_type.name = "dynamodb";
+	secret_type.deserializer = KeyValueSecret::Deserialize<KeyValueSecret>;
+	secret_type.default_provider = "credential_chain";
+	secret_type.extension = "dynamodb";
+	loader.RegisterSecretType(secret_type);
+
+	CreateSecretFunction dynamo_secret_fun = {"dynamodb", "credential_chain", CreateDynamoSecret};
+	dynamo_secret_fun.named_parameters["access_key_id"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["secret_access_key"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["region"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["endpoint_url"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["provider"] = LogicalType::VARCHAR;
+	loader.RegisterFunction(dynamo_secret_fun);
+
+	Aws::InitAPI({});
 }
 
 void DynamodbExtension::Load(ExtensionLoader &loader) {

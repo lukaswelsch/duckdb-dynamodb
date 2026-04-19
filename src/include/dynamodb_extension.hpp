@@ -10,6 +10,17 @@ namespace duckdb {
 class AWSClientWrapper;
 enum class DynamoOperation;
 
+// --------------------
+// Secret Config
+// --------------------
+struct DynamoDBSecretConfig {
+	std::string access_key_id;
+	std::string secret_access_key;
+	std::string region;
+	std::string endpoint;
+	std::string provider;
+};
+
 // ─────────────────────────────────────────────
 // GSI metadata declared by user or auto-detected
 // ─────────────────────────────────────────────
@@ -46,12 +57,15 @@ struct TableConfig {
 	int parallel_segments = 4; // parallelism for full scans
 	int sample_size = 200;     // items sampled for schema inference
 	std::string endpoint_url;  // e.g. http://localhost:8000 for DynamoDB Local
+
+	//@todo remove this from here -> part of the secret
 	std::string region = "us-east-1";
 	// "infer"  → union schema from sample, NULLs for missing attrs
 	// "json"   → single raw JSON column per row (dynamodb_json function)
 	// "hybrid" → real columns for common attrs + _extra JSON for the rest
 	std::string schema_mode = "hybrid";
 	double hybrid_threshold = 0.8; // attr must appear in >80% of samples to be a column
+	std::string secret_name;
 };
 
 // ─────────────────────────────────────────────
@@ -59,6 +73,8 @@ struct TableConfig {
 // ─────────────────────────────────────────────
 struct DynamoBindData : FunctionData {
 	TableConfig config;
+	DynamoDBSecretConfig secret_config;
+
 	SchemaInfo schema;
 	vector<column_t> projected_col_indices;
 	std::string pk_value;
@@ -81,5 +97,4 @@ public:
 	void Load(ExtensionLoader &db) override;
 	std::string Name() override;
 };
-
 } // namespace duckdb

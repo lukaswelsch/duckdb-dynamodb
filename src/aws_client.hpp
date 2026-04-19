@@ -4,6 +4,7 @@
 // Thin wrapper around the AWS SDK DynamoDB client.
 // Swap the endpoint_url to point at DynamoDB Local for testing.
 
+#include "dynamodb_secret.hpp"
 #include "include/dynamodb_extension.hpp"
 #include <aws/core/Aws.h>
 #include <aws/core/client/ClientConfiguration.h>
@@ -31,9 +32,17 @@ struct DynamoPage {
 // ─────────────────────────────────────────────
 class AWSClientWrapper {
 public:
-	explicit AWSClientWrapper(const TableConfig &config) {
+	explicit AWSClientWrapper(const TableConfig &config, const DynamoDBSecretConfig &secret_config) {
 		Aws::Client::ClientConfiguration cfg;
-		cfg.region = config.region;
+		cfg.region = secret_config.region;
+
+		std::cout << cfg.region << std::endl;
+
+		Aws::Auth::AWSCredentials creds(
+			secret_config.access_key_id,
+			secret_config.secret_access_key
+		);
+
 
 		// ← Point at DynamoDB Local when endpoint_url is set
 		// e.g.  endpoint_url = "http://localhost:8000"
@@ -41,7 +50,7 @@ public:
 			cfg.endpointOverride = config.endpoint_url;
 		}
 
-		client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+		client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
 	}
 
 	// ── DescribeTable ─────────────────────────────────────────────────────

@@ -64,8 +64,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
                              DynamoScanState &state) {
 	auto &config = bind_data.config;
 
-	fprintf(stderr, "Trypushfilter \n");
-
 	// Only ConstantFilter is safe to push (column OP constant)
 	// ConjunctionFilter (AND/OR) is handled recursively by DuckDB
 	if (filter.filter_type != TableFilterType::CONSTANT_COMPARISON) {
@@ -120,7 +118,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScanState &state,
                                      const TableFilterSet *filters, ClientContext &ctx) {
 	if (!filters || filters->filters.empty()) {
-		fprintf(stderr, "No Filter \n");
 		// No predicates at all → must full scan
 		if (!bind_data.config.allow_full_scan) {
 			throw InvalidInputException("Query on '%s' requires a full table scan. "
