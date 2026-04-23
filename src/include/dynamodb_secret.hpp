@@ -38,6 +38,7 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 
 	auto get = [&](const std::string &key) -> std::string {
 		auto val = kv->TryGetValue(key);
+		if (val.IsNull()) return "";
 		return val.ToString();
 	};
 
@@ -45,7 +46,7 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 	cfg.secret_access_key = get("SECRET_ACCESS_KEY");
 	cfg.region = get("REGION");
 	cfg.endpoint = get("ENDPOINT_URL");
-	cfg.provider = get("PROVIDER");
+	cfg.provider = get(" PROVIDER");
 
 	return cfg;
 }
