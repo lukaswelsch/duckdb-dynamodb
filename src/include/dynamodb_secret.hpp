@@ -21,9 +21,19 @@ static unique_ptr<BaseSecret> CreateDynamoSecret(ClientContext &ctx,
 static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::string &secret_name) {
 	auto &manager = SecretManager::Get(ctx);
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(ctx);
+	unique_ptr<const BaseSecret> secret;
 
-	auto entry = manager.GetSecretByName(transaction, secret_name, "");
-	auto &secret = entry->secret;
+	if (!secret_name.empty()) {
+		auto entry = manager.GetSecretByName(transaction, secret_name, "");
+		secret = std::move(entry->secret);
+	}
+	else {
+		auto match = manager.LookupSecret(transaction, "", "dynamodb");
+		if (!match.HasMatch()) {
+			throw std::runtime_error("No DynamoDB secret found and no default available");
+		}
+		secret = match.GetSecret().Clone();
+	}
 
 	if (!secret) {
 		throw std::runtime_error("DynamoDB secret not found: " + secret_name);
@@ -42,11 +52,11 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 		return val.ToString();
 	};
 
-	cfg.access_key_id = get("ACCESS_KEY_ID");
-	cfg.secret_access_key = get("SECRET_ACCESS_KEY");
-	cfg.region = get("REGION");
-	cfg.endpoint = get("ENDPOINT_URL");
-	cfg.provider = get(" PROVIDER");
+	cfg.access_key_id = get("access_key_id");
+	cfg.secret_access_key = get("secret_access_key");
+	cfg.region = get("region");
+	cfg.endpoint = get("endpoint_url");
+	cfg.provider = get("provider");
 
 	return cfg;
 }

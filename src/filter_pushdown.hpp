@@ -73,7 +73,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 	auto &cf = (const ConstantFilter &)filter;
 
 	// Build safe placeholder names to avoid DynamoDB reserved word conflicts
-	// e.g. "status" is a reserved word in DynamoDB → use "#status" + ExpressionAttributeNames
 	std::string attr_ref = "#" + col_name;
 	std::string val_ref = ":" + col_name + "val";
 
@@ -118,7 +117,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScanState &state,
                                      const TableFilterSet *filters, ClientContext &ctx) {
 	if (!filters || filters->filters.empty()) {
-		// No predicates at all → must full scan
 		if (!bind_data.config.allow_full_scan) {
 			throw InvalidInputException("Query on '%s' requires a full table scan. "
 			                            "Pass allow_full_scan=true to proceed (expensive!).",
@@ -136,7 +134,6 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScan
 			schema_idx = state.projected_col_indices[col_idx];
 		}
 
-		// Resolve column index → column name using schema
 		std::string col_name = bind_data.schema.columns[schema_idx].name;
 
 		PushdownResult r = TryPushFilter(col_name, *filter, bind_data, state);
@@ -153,8 +150,8 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScan
 		              state.key_condition_expr.find("#" + bind_data.config.sk_name) != std::string::npos;
 
 		// GetItem is only possible for exact PK+SK equality (both present)
-		// If we have PK=val AND SK=val → GetItem (cheapest)
-		// Otherwise → Query on PK (still cheap, reads partition only)
+		// If we have PK=val AND SK=val use GetItem (cheapest)
+		// Otherwise: Query on PK (still cheap, reads partition only)
 		if (has_sk)
 			return DynamoOperation::GET_ITEM;
 		return DynamoOperation::QUERY;

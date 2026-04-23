@@ -1,10 +1,3 @@
-// schema_inference.hpp
-// Samples N items from DynamoDB and builds a SchemaInfo:
-//   - Attributes present in >= threshold% of items → real DuckDB columns
-//   - Rarer attributes → serialised into a "_extra" JSON VARCHAR column
-//
-// Handles heterogeneous rows (the normal DynamoDB case) gracefully.
-
 #pragma once
 
 #include "dynamodb_extension.hpp"
@@ -18,8 +11,6 @@ namespace duckdb {
 // Map a DynamoDB AttributeValue type tag to a DuckDB LogicalType
 // ─────────────────────────────────────────────
 LogicalType AttributeTypeToLogical(const Aws::DynamoDB::Model::AttributeValue &av) {
-	using AV = Aws::DynamoDB::Model::AttributeValue;
-
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::STRING)
 		return LogicalType::VARCHAR;
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::NUMBER)
@@ -29,12 +20,10 @@ LogicalType AttributeTypeToLogical(const Aws::DynamoDB::Model::AttributeValue &a
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::NULLVALUE)
 		return LogicalType::VARCHAR;
 
-	// Lists (L) and Maps (M) → JSON string, DuckDB can shred with -> operator
 	// if (av.GetType() == Aws::DynamoDB::Model::ValueType::ARRAY)   return LogicalType::VARCHAR;
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::ATTRIBUTE_MAP)
 		return LogicalType::VARCHAR;
 
-	// Binary sets, string sets, number sets → VARCHAR (comma-joined or JSON)
 	return LogicalType::VARCHAR;
 }
 
@@ -97,7 +86,6 @@ SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
 	int n = std::min((int)items.size(), config.sample_size);
 
 	// ── Count attribute occurrence frequency ──────────────────────────────
-	// attr_name → (appearance_count, observed_type)
 	std::map<std::string, int> attr_count;
 	std::map<std::string, LogicalType> attr_type;
 
@@ -108,7 +96,6 @@ SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
 				attr_type[attr_name] = AttributeTypeToLogical(attr_val);
 			} else {
 				// Type conflict resolution: widen to VARCHAR
-				// e.g. if one item has "amount" as N and another as S → VARCHAR
 				LogicalType observed = AttributeTypeToLogical(attr_val);
 				if (attr_type[attr_name] != observed) {
 					attr_type[attr_name] = LogicalType::VARCHAR;
@@ -124,14 +111,13 @@ SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
 	for (auto &[attr_name, count] : attr_count) {
 		double freq = (double)count / n;
 		if (config.schema_mode == "infer" || freq >= threshold) {
-			// Frequent enough → becomes a real DuckDB column
 			ColumnInfo col;
 			col.name = attr_name;
 			col.duckdb_type = attr_type[attr_name];
-			col.always_present = (count == n); // true → never NULL in sample
+			col.always_present = (count == n);
 			schema.columns.push_back(col);
 		} else {
-			// Infrequent → goes into _extra JSON blob
+			// Infrequent goes into _extra JSON blob
 			schema.extra_attrs.push_back(attr_name);
 		}
 	}
@@ -150,11 +136,6 @@ SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
 
 // ─────────────────────────────────────────────
 // Materialise one DynamoDB item into a DuckDB output chunk row.
-//
-// For each column in the schema:
-//   - If the item has the attribute → write the value
-//   - If not → write NULL
-//   - For "_extra" → serialize all rare attributes as a JSON object
 // ─────────────────────────────────────────────
 void AppendItemToChunk(const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &item,
                        const SchemaInfo &schema, const vector<column_t> &projected_col_indices, DataChunk &output,

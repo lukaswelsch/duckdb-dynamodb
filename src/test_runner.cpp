@@ -61,14 +61,14 @@ int main() {
 	         "Basic full scan (first 5 rows)");
 
 	// ══════════════════════════════════════════════════════════════════════
-	// TEST 2 — PK predicate pushdown → Query (not Scan)
+	// TEST 2 — PK predicate pushdown
 	//   Confirm by checking the query doesn't throw "allow_full_scan required"
 	// ══════════════════════════════════════════════════════════════════════
 	RunQuery(con,
 	         "SELECT * FROM dynamodb_scan('orders', " + LOCAL +
 	             ")"
 	             " WHERE customerId = 'CUST-001'",
-	         "PK predicate → routed as Query, no full scan");
+	         "PK predicate routed as Query, no full scan");
 
 	// ══════════════════════════════════════════════════════════════════════
 	// TEST 3 — GROUP BY on full scan (parallel segments)
@@ -137,7 +137,7 @@ int main() {
 	//   Verify by checking _extra is NULL (no other cols requested).
 	// ══════════════════════════════════════════════════════════════════════
 	RunQuery(con,
-	         "SELECT customerId, amount" // only 2 cols → ProjectionExpression='customerId,amount'
+	         "SELECT customerId, amount"
 	         " FROM dynamodb_scan('orders', " +
 	             LOCAL + ", allow_full_scan=true) LIMIT 5",
 	         "Projection pushdown — only 2 cols fetched from DynamoDB");

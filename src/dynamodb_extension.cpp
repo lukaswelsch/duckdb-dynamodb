@@ -189,13 +189,6 @@ static unique_ptr<LocalTableFunctionState> DynamoInitLocal(ExecutionContext &ctx
 // ─────────────────────────────────────────────
 // SCAN — called repeatedly per thread until done.
 // Fills one DataChunk (~2048 rows) per call.
-//
-// GROUP BY acceleration:
-//   DuckDB's vectorised hash-aggregate operator sits above this
-//   and ingests chunks in parallel from all scan threads.
-//   Each thread independently scans its DynamoDB segment, so
-//   GROUP BY across a full scan is automatically parallelised.
-//   DuckDB merges partial aggregates from threads at the top.
 // ─────────────────────────────────────────────
 static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, DataChunk &output) {
 	auto &bind_data = input.bind_data->Cast<DynamoBindData>();
@@ -246,8 +239,8 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 			}
 			cursor = global.last_evaluated_key;
 			DynamoPage local_page =
-			    aws.Query(bind_data.config, global.key_condition_expr, global.filter_expr, global.index_name,
-			              needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
+			    aws.Query(bind_data.config, global.key_condition_expr, global.index_name,
+			                                  needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
 			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
 			global.last_evaluated_key = local_page.next_cursor;
@@ -260,7 +253,7 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	case DynamoOperation::SCAN: {
 		// Each thread independently paginates through its own segment.
 		// This is the key to parallel GROUP BY performance:
-		//   N threads × independent DynamoDB segments → N×  throughput
+		//   N threads × independent DynamoDB segments -> N×  throughput
 		while (local.buffer_offset >= local.item_buffer.size()) {
 			// Current segment exhausted — claim the next one
 			if (local.segment_done || local.current_segment == -1) {
@@ -391,6 +384,7 @@ void LoadInternal(ExtensionLoader &loader) {
 	secret_type.default_provider = "credential_chain";
 	secret_type.extension = "dynamodb";
 	loader.RegisterSecretType(secret_type);
+
 
 	CreateSecretFunction dynamo_secret_fun = {"dynamodb", "credential_chain", CreateDynamoSecret};
 	dynamo_secret_fun.named_parameters["access_key_id"] = LogicalType::VARCHAR;

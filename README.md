@@ -119,8 +119,5 @@ There are 2 functions available both scan a DynamoDB table and push PK/SK/GSI pr
 
 ## Limitations
 
-- DynamoDB does not support aggregation natively. All `GROUP BY`, `COUNT`, `SUM`, etc. are executed by DuckDB after data is fetched.
-- `IN` on a sort key is not natively supported by DynamoDB's `KeyConditionExpression` and is evaluated locally by DuckDB.
-- `IN` on non-indexed attributes is evaluated locally by DuckDB.
 - Write operations (`INSERT`, `UPDATE`, `DELETE`) are not supported.
  

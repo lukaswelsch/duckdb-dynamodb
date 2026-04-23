@@ -1,9 +1,5 @@
 #pragma once
 
-// aws_client.hpp
-// Thin wrapper around the AWS SDK DynamoDB client.
-// Swap the endpoint_url to point at DynamoDB Local for testing.
-
 #include "dynamodb_secret.hpp"
 #include "include/dynamodb_extension.hpp"
 #include <aws/core/Aws.h>
@@ -105,12 +101,12 @@ public:
 	}
 
 	// ── Query — PK/SK key condition, or through a GSI ─────────────────────
-	DynamoPage Query(const TableConfig &config, const std::string &key_condition_expr,
-	                 const std::string &filter_expr, // may be empty
-	                 const std::string &index_name,  // may be empty
-	                 const std::vector<std::string> &projection_cols,
-	                 const std::unordered_map<std::string, std::string> &expr_attr_values,
-	                 const std::unordered_map<std::string, std::string> &expr_attr_names_in,
+	DynamoPage Query(const TableConfig &config,
+	                 const string &key_condition_expr,
+	                 const string &index_name,
+	                 const std::vector<string> &projection_cols,
+	                 const unordered_map<string, string> &expr_attr_values,
+	                 const unordered_map<string, string> &expr_attr_names_in,
 	                 const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &start_key) {
 		Aws::DynamoDB::Model::QueryRequest req;
 		Aws::Map<Aws::String, Aws::String> expr_attr_names;
@@ -135,7 +131,6 @@ public:
 			req.SetExpressionAttributeNames(expr_attr_names);
 		}
 
-		// Bind :placeholder → value mappings
 		for (auto &[k, v] : expr_attr_values) {
 			Aws::DynamoDB::Model::AttributeValue av;
 			av.SetS(v); // simplified — real impl handles N, BOOL, L, M, etc.
@@ -198,7 +193,6 @@ public:
 		if (!item.empty()) {
 			page.items.push_back(item);
 		}
-		// next_cursor left empty → signals end of "pagination"
 		return page;
 	}
 
