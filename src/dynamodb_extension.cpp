@@ -64,7 +64,8 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 	auto table_name = input.inputs[0].GetValue<std::string>();
 	auto bind_data = make_uniq<DynamoBindData>();
 
-	auto table_config = ParseTableConfig(table_name, input.named_parameters);;
+	auto table_config = ParseTableConfig(table_name, input.named_parameters);
+	;
 	bind_data->config = ParseTableConfig(table_name, input.named_parameters);
 	bind_data->secret_config = LoadDynamoSecret(ctx, table_config.secret_name);
 
@@ -238,8 +239,7 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 				return;
 			}
 			cursor = global.last_evaluated_key;
-			DynamoPage local_page =
-			    aws.Query(bind_data.config, global.key_condition_expr, global.index_name,
+			DynamoPage local_page = aws.Query(bind_data.config, global.key_condition_expr, global.index_name,
 			                                  needed_cols, global.expr_attr_values, global.expr_attr_names, cursor);
 			local.item_buffer = std::move(local_page.items);
 			local.buffer_offset = 0;
@@ -299,7 +299,6 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	output.SetCardinality(row);
 }
 
-
 // ─────────────────────────────────────────────
 // EXTENSION LOAD
 // ─────────────────────────────────────────────
@@ -323,11 +322,11 @@ void LoadInternal(ExtensionLoader &loader) {
 	scan_func.filter_prune = true;
 	scan_func.projection_pushdown = true;
 	scan_func.pushdown_complex_filter = [](ClientContext &ctx, LogicalGet &get, FunctionData *bind_data_p,
-									   vector<unique_ptr<Expression>> &filters) {
+	                                       vector<unique_ptr<Expression>> &filters) {
 		/*
-		*    if pk_filter is set then: return filters without pk_filter
-		*    if we have a gsi filter: return filters without the first gsi_filter
-		*    else return all filters
+		 *    if pk_filter is set then: return filters without pk_filter
+		 *    if we have a gsi filter: return filters without the first gsi_filter
+		 *    else return all filters
 		 */
 		auto &bind_data = bind_data_p->Cast<DynamoBindData>();
 		int remove_idx = -1;
@@ -341,7 +340,7 @@ void LoadInternal(ExtensionLoader &loader) {
 			} else if (IsGSIFilter(filter, bind_data.config)) {
 				auto pk_name = GetPKColname(filter);
 				auto it = std::find_if(bind_data.config.gsis.begin(), bind_data.config.gsis.end(),
-					[&pk_name](GSIConfig &gsi) { return gsi.pk_name == pk_name; });
+				                       [&pk_name](GSIConfig &gsi) { return gsi.pk_name == pk_name; });
 				if (it != bind_data.config.gsis.end()) {
 					it->gsi_value = ExtractPKValue(filter);
 				}
@@ -376,7 +375,6 @@ void LoadInternal(ExtensionLoader &loader) {
 
 	loader.RegisterFunction(json_func);
 
-
 	// Register Secrets for dynamodb
 	SecretType secret_type;
 	secret_type.name = "dynamodb";
@@ -384,7 +382,6 @@ void LoadInternal(ExtensionLoader &loader) {
 	secret_type.default_provider = "credential_chain";
 	secret_type.extension = "dynamodb";
 	loader.RegisterSecretType(secret_type);
-
 
 	CreateSecretFunction dynamo_secret_fun = {"dynamodb", "credential_chain", CreateDynamoSecret};
 	dynamo_secret_fun.named_parameters["access_key_id"] = LogicalType::VARCHAR;

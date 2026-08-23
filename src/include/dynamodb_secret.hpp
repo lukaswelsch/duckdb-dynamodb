@@ -5,8 +5,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 
 namespace duckdb {
-static unique_ptr<BaseSecret> CreateDynamoSecret(ClientContext &ctx,
-												  CreateSecretInput &input) {
+static unique_ptr<BaseSecret> CreateDynamoSecret(ClientContext &ctx, CreateSecretInput &input) {
 	auto scope = input.scope;
 	auto result = make_uniq<KeyValueSecret>(scope, input.type, input.provider, input.name);
 
@@ -26,8 +25,7 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 	if (!secret_name.empty()) {
 		auto entry = manager.GetSecretByName(transaction, secret_name, "");
 		secret = std::move(entry->secret);
-	}
-	else {
+	} else {
 		auto match = manager.LookupSecret(transaction, "", "dynamodb");
 		if (!match.HasMatch()) {
 			throw std::runtime_error("No DynamoDB secret found and no default available");
@@ -48,7 +46,8 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 
 	auto get = [&](const std::string &key) -> std::string {
 		auto val = kv->TryGetValue(key);
-		if (val.IsNull()) return "";
+		if (val.IsNull())
+			return "";
 		return val.ToString();
 	};
 
@@ -60,4 +59,4 @@ static DynamoDBSecretConfig LoadDynamoSecret(ClientContext &ctx, const std::stri
 
 	return cfg;
 }
-}
+} // namespace duckdb
