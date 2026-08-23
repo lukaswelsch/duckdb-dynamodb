@@ -38,10 +38,7 @@ public:
 		}
 
 		if (!secret_config.access_key_id.empty() && !secret_config.secret_access_key.empty()) {
-			Aws::Auth::AWSCredentials creds(
-				secret_config.access_key_id,
-				secret_config.secret_access_key
-			);
+			Aws::Auth::AWSCredentials creds(secret_config.access_key_id, secret_config.secret_access_key);
 			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
 		} else {
 			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
@@ -101,11 +98,8 @@ public:
 	}
 
 	// ── Query — PK/SK key condition, or through a GSI ─────────────────────
-	DynamoPage Query(const TableConfig &config,
-	                 const string &key_condition_expr,
-	                 const string &index_name,
-	                 const std::vector<string> &projection_cols,
-	                 const unordered_map<string, string> &expr_attr_values,
+	DynamoPage Query(const TableConfig &config, const string &key_condition_expr, const string &index_name,
+	                 const std::vector<string> &projection_cols, const unordered_map<string, string> &expr_attr_values,
 	                 const unordered_map<string, string> &expr_attr_names_in,
 	                 const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &start_key) {
 		Aws::DynamoDB::Model::QueryRequest req;
@@ -142,10 +136,8 @@ public:
 		}
 		std::cout << "Table: " << req.GetTableName() << std::endl;
 		std::cout << "Index: " << req.GetIndexName() << std::endl;
-		std::cout << "KeyConditionExpression: "
-				  << req.GetKeyConditionExpression() << std::endl;
-		std::cout << "FilterExpression: "
-				  << req.GetFilterExpression() << std::endl;
+		std::cout << "KeyConditionExpression: " << req.GetKeyConditionExpression() << std::endl;
+		std::cout << "FilterExpression: " << req.GetFilterExpression() << std::endl;
 
 		auto outcome = client_->Query(req);
 		if (!outcome.IsSuccess()) {

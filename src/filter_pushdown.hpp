@@ -171,7 +171,6 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScan
 	return DynamoOperation::SCAN;
 }
 
-
 static bool isEqualityFilter(const unique_ptr<Expression> &expr) {
 	if (expr->GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 		return false;
@@ -212,15 +211,12 @@ static bool IsGSIFilter(const unique_ptr<Expression> &expr, const TableConfig &c
 
 		// Find GSI value
 		bool is_gsi_pk = std::any_of(config.gsis.begin(), config.gsis.end(),
-		[&col_name](const GSIConfig& gsi) {
-			return gsi.pk_name == col_name;
-		});
+		                             [&col_name](const GSIConfig &gsi) { return gsi.pk_name == col_name; });
 
 		// Column must be PK
 		return is_gsi_pk;
 	}
 	return false;
-
 }
 
 // Extract the constant value from a pk = 'value' expression
