@@ -51,6 +51,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: 'DUMMY'
           AWS_DEFAULT_REGION: 'us-east-1'
           DYNAMODB_ENDPOINT_URL: 'http://localhost:8000'
+          DYNAMODB_TEST_ENDPOINT: 1
           VCPKG_TOOLCHAIN_PATH: '${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake'
         run: |
           make release
