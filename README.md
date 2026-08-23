@@ -80,8 +80,8 @@ Provide credentials explicitly:
 CREATE OR REPLACE SECRET dynamo_secret (
     TYPE dynamodb,
     PROVIDER config,
-    KEY_ID 'AKIAIOSFODNN7EXAMPLE',
-    SECRET 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    KEY_ID 'EXAMPLE',
+    SECRET 'EXAMPLESECRET',
     REGION 'eu-west-1'
 );
 ```
@@ -97,15 +97,6 @@ CREATE OR REPLACE SECRET dynamo_secret (
 );
 ```
 
-A specific chain order can be specified with the `CHAIN` keyword:
-
-```sql
-CREATE OR REPLACE SECRET dynamo_secret (
-    TYPE dynamodb,
-    PROVIDER credential_chain,
-    REGION 'eu-west-1'
-);
-```
 
 ## Function Reference
 
