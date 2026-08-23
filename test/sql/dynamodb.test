@@ -5,8 +5,12 @@
 # Require statement will ensure this test is run with this extension loaded
 require dynamodb
 
+require-env DYNAMODB_TEST_ENDPOINT
+
 # Confirm the extension works
 query I
+create or replace secret dev(type dynamodb);
+
 SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE) WHERE status='CANCELLED';
 #SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE, pk=customerId) WHERE customerId='CUST-003';
 ----

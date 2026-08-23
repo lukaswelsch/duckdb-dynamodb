@@ -39,6 +39,10 @@ jobs:
           pip install boto3
           python seed_local_dynamodb.py
 
+      - name: Setup vcpkg
+        run: |
+          make setup-vcpkg
+
       # Build extension and execute the test/ directory SQL files via sqllogictest
       - name: Build and Run SQL Tests
         env:
@@ -46,6 +50,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: 'DUMMY'
           AWS_DEFAULT_REGION: 'us-east-1'
           DYNAMODB_ENDPOINT_URL: 'http://localhost:8000'
+          VCPKG_TOOLCHAIN_PATH: '${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake'
         run: |
           make release
           build/release/test/unittest "test/sql/*"
