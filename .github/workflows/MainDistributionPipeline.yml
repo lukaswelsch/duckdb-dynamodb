@@ -41,7 +41,8 @@ jobs:
 
       - name: Setup vcpkg
         run: |
-          make setup-vcpkg
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
       # Build extension and execute the test/ directory SQL files via sqllogictest
       - name: Build and Run SQL Tests
