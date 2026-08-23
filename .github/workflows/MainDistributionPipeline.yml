@@ -12,6 +12,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 1. Custom Integration Job that executes SQL files in test/ against Local DynamoDB
+  dynamodb-sql-tests:
+    name: Run SQL Extension Tests
+    runs-on: ubuntu-latest
+
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # Seed the DynamoDB Local table before tests run
+      - name: Seed DynamoDB Mock Data
+        run: |
+          pip install boto3
+          python seed_local_dynamodb.py
+
+      # Build extension and execute the test/ directory SQL files via sqllogictest
+      - name: Build and Run SQL Tests
+        env:
+          AWS_ACCESS_KEY_ID: 'DUMMY'
+          AWS_SECRET_ACCESS_KEY: 'DUMMY'
+          AWS_DEFAULT_REGION: 'us-east-1'
+          DYNAMODB_ENDPOINT_URL: 'http://localhost:8000'
+        run: |
+          make release
+          build/release/test/unittest "test/sql/*"
+
   duckdb-stable-build:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.5
