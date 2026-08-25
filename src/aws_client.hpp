@@ -69,9 +69,12 @@ public:
 		req.SetSegment(segment_index);
 		req.SetTotalSegments(total_segments);
 
-		// Projection pushdown — fetch only the columns DuckDB needs
-		if (!projection_cols.empty()) {
-			req.SetProjectionExpression(BuildProjection(projection_cols, expr_attr_names));
+		std::string proj = BuildProjection(projection_cols, expr_attr_names);
+		if (!proj.empty()) {
+			req.SetProjectionExpression(proj);
+		}
+
+		if (!expr_attr_names.empty()) {
 			req.SetExpressionAttributeNames(expr_attr_names);
 		}
 
@@ -194,6 +197,11 @@ private:
 	// Comma-separated projection expression from column names
 	static std::string BuildProjection(const std::vector<std::string> &cols,
 	                                   Aws::Map<Aws::String, Aws::String> &expr_attr_names) {
+		for (const auto &col : cols) {
+			if (col == "_extra") {
+				return "";
+			}
+		}
 		std::string expr;
 		for (const auto &col : cols) {
 			if (col == "_extra")

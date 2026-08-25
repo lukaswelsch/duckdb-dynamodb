@@ -2,6 +2,7 @@ import boto3
 import random
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 dynamo = boto3.resource(
     "dynamodb",
@@ -39,7 +40,6 @@ try:
                     {"AttributeName": "status", "KeyType": "HASH"},
                 ],
                 "Projection": {"ProjectionType": "ALL"},
-                "ProvisionedThroughput": {"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
             }
         ],
         BillingMode="PAY_PER_REQUEST",
@@ -61,14 +61,14 @@ with table.batch_writer() as batch:
         customer_id = random.choice(CUSTOMERS)
         order_id    = str(uuid.uuid4())
         status      = random.choice(STATUSES)
-        amount      = round(random.uniform(10, 500), 2)
+        amount      = Decimal(str(round(random.uniform(10, 500), 2)))
         created_at  = (datetime.now() - timedelta(days=random.randint(0, 365))).isoformat()
 
         item = {
             "customerId": customer_id,
             "orderId":    order_id,
             "status":     status,
-            "amount":     str(amount),   # DynamoDB stores numbers as strings in SDK
+            "amount":     amount,
             "createdAt":  created_at,
         }
 
@@ -89,6 +89,16 @@ with table.batch_writer() as batch:
             }
 
         batch.put_item(Item=item)
+
+    batch.put_item({
+        "customerId": "test_cust_id",
+        "orderId":    "1234",
+        "status":     "ACTIVE",
+        "amount":     Decimal("350.00"),
+        "createdAt":  "2026-04-01T23:40:53.371863",
+        "tags":       "extra_tag",
+    }
+    )
 
 print("rows seeded")
 

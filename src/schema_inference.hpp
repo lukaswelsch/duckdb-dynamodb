@@ -126,7 +126,7 @@ SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
 	if (config.schema_mode == "hybrid" && !schema.extra_attrs.empty()) {
 		ColumnInfo extra_col;
 		extra_col.name = "_extra";
-		extra_col.duckdb_type = LogicalType::VARCHAR; // JSON string
+		extra_col.duckdb_type = LogicalType::JSON(); // JSON string
 		extra_col.always_present = false;
 		schema.columns.push_back(extra_col);
 	}
@@ -151,11 +151,12 @@ void AppendItemToChunk(const Aws::Map<Aws::String, Aws::DynamoDB::Model::Attribu
 			std::string json = "{";
 			bool first = true;
 			for (auto &extra_attr : schema.extra_attrs) {
-				auto it = item.find(extra_attr);
+				auto it = item.find(Aws::String(extra_attr.c_str()));
 				if (it != item.end()) {
 					if (!first)
 						json += ",";
 					json += "\"" + extra_attr + "\":\"" + AttributeValueToString(it->second) + "\"";
+					
 					first = false;
 				}
 			}
