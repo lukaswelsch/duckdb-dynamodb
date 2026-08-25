@@ -64,6 +64,7 @@ jobs:
       duckdb_version: v1.5.5
       ci_tools_version: v1.5.5
       extension_name: dynamodb
+      exclude_archs: "wasm_mvp;wasm_eh;wasm_threads"
 
   code-quality-check:
     name: Code Quality Check
