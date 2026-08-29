@@ -40,6 +40,7 @@ AND amount = 350;
 test_cust_id
 1234
 
+# Check that the extra tag is serialized correctly
 query I
 SELECT _extra.tags
 FROM dynamodb_scan('orders', endpoint='http://localhost:8000', allow_full_scan=TRUE)
@@ -47,3 +48,17 @@ WHERE _extra->>'tags' = 'extra_tag'
 LIMIT 1;
 ----
 "extra_tag"
+
+# Check that all columns are returned if hybrid_threshold is set to 0
+query IIIIIIII
+SELECT * FROM dynamodb_scan('orders', endpoint='http://localhost:8000', allow_full_scan=TRUE, hybrid_threshold=0)
+WHERE customerId='test_cust_id';
+----
+350.0
+2026-04-01T23:40:53.371863
+test_cust_id
+NULL
+1234
+NULL
+ACTIVE
+extra_tag
