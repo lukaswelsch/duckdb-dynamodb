@@ -93,7 +93,6 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 					g.sk_name = k.GetAttributeName();
 				}
 			}
-			fprintf(stderr, "Detected GSI pk: %s, sk: %s", g.pk_name.c_str(), g.sk_name.c_str());
 			bind_data->config.gsis.push_back(g);
 		}
 	}
@@ -334,7 +333,6 @@ void LoadInternal(ExtensionLoader &loader) {
 		for (int i = 0; i < (int)filters.size(); i++) {
 			auto &filter = filters[i];
 			if (GetPKColname(filter) == bind_data.config.pk_name) {
-				std::cout << filter->ToString() << std::endl;
 				bind_data.pk_value = ExtractPKValue(filter);
 				remove_idx = i;
 			} else if (IsGSIFilter(filter, bind_data.config)) {
@@ -352,11 +350,6 @@ void LoadInternal(ExtensionLoader &loader) {
 
 		if (remove_idx != -1) {
 			filters.erase(filters.begin() + remove_idx);
-		}
-
-		for (auto &filter : filters) {
-			std::cout << "REMAINING----------" << std::endl;
-			std::cout << filter->ToString() << std::endl;
 		}
 	};
 

@@ -50,6 +50,14 @@ GROUP BY status;
 
 > **Warning:** Full scans consume RCUs proportional to the total table size. Use with caution on large tables.
 
+## Schema inference
+This extensions scans a sample of DynamoDB items, counts how frequently each attribute appears, and infers a DuckDB type from its DynamoDB AttributeValue
+Conflicting types are widened to VARCHAR. 
+
+On default the extension uses the hybrid mode. 
+In hybrid mode, attributes appearing in at least hybrid_threshold (default 80%) become regular columns.
+Rarer attributes are collected into an _extra JSON column.
+
 ## Configuration and Authentication
 
 Authentication uses [DuckDB Secrets Manager](https://duckdb.org/docs/current/configuration/secrets_manager.html). The extension supports two providers.

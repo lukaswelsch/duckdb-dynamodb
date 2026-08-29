@@ -102,10 +102,6 @@ public:
 			throw std::runtime_error("Scan failed: " + outcome.GetError().GetMessage());
 		}
 
-		fprintf(stderr, "DYNAMO SCAN: segment=%d/%d → %zu items returned, has_more=%s\n", segment_index, total_segments,
-		        outcome.GetResult().GetItems().size(),
-		        outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
-
 		DynamoPage page;
 		page.items = outcome.GetResult().GetItems();
 		page.next_cursor = outcome.GetResult().GetLastEvaluatedKey(); // empty = done
@@ -149,19 +145,11 @@ public:
 		if (!start_key.empty()) {
 			req.SetExclusiveStartKey(start_key);
 		}
-		std::cout << "Table: " << req.GetTableName() << std::endl;
-		std::cout << "Index: " << req.GetIndexName() << std::endl;
-		std::cout << "KeyConditionExpression: " << req.GetKeyConditionExpression() << std::endl;
-		std::cout << "FilterExpression: " << req.GetFilterExpression() << std::endl;
 
 		auto outcome = client_->Query(req);
 		if (!outcome.IsSuccess()) {
 			throw std::runtime_error("Query failed: " + outcome.GetError().GetMessage());
 		}
-
-		fprintf(stderr, "DYNAMO QUERY: key='%s' → %zu items returned, has_more=%s\n", key_condition_expr.c_str(),
-		        outcome.GetResult().GetItems().size(),
-		        outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
 
 		DynamoPage page;
 		page.items = outcome.GetResult().GetItems();

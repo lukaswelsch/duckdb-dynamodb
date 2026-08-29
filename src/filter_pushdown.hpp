@@ -96,7 +96,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 	}
 
 	if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
-		fprintf(stderr, "MatchGSI (%s) \n", col_name.c_str());
 		const GSIConfig *gsi = MatchGSI(col_name, config);
 		if (gsi) {
 			state.index_name = gsi->index_name;
