@@ -5,43 +5,10 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
-#include <aws/core/auth/STSCredentialsProvider.h>
 #include <aws/core/auth/SSOCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
-#include <aws/core/auth/LoginCredentialsProvider.h>
 
 namespace duckdb {
-static Aws::Auth::AWSCredentials ResolveViaChain(const std::string &chain_spec, const std::string &profile) {
-	std::vector<std::string> providers;
-	std::stringstream ss(chain_spec.empty() ? "config;sso;sts;env;instance;process" : chain_spec);
-	std::string item;
-	while (std::getline(ss, item, ';')) providers.push_back(item);
-
-	for (auto &p : providers) {
-		std::shared_ptr<Aws::Auth::AWSCredentialsProvider> provider;
-		if (p == "env") {
-			provider = Aws::MakeShared<Aws::Auth::EnvironmentAWSCredentialsProvider>("dynamodb");
-		} else if (p == "config") {
-			provider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>(
-				"dynamodb", profile.empty() ? "default" : profile.c_str());
-		} else if (p == "sso") {
-			provider = Aws::MakeShared<Aws::Auth::SSOCredentialsProvider>(
-				"dynamodb", profile.empty() ? "default" : profile.c_str());
-		} else if (p == "sts") {
-			provider = Aws::MakeShared<Aws::Auth::STSAssumeRoleWebIdentityCredentialsProvider>("dynamodb");
-		} else if (p == "instance") {
-			provider = Aws::MakeShared<Aws::Auth::InstanceProfileCredentialsProvider>("dynamodb");
-		} else if (p == "process") {
-			provider = Aws::MakeShared<Aws::Auth::ProcessCredentialsProvider>("dynamodb");
-		} else {
-			continue;
-		}
-		auto creds = provider->GetAWSCredentials();
-		if (!creds.GetAWSAccessKeyId().empty()) return creds;
-	}
-
-	throw std::runtime_error("credential_chain: no provider in chain [" + chain_spec + "] resolved credentials");
-}
 static void ResolveCredentialChain(CreateSecretInput &input, KeyValueSecret &result) {
 	if (input.options.find("access_key_id") != input.options.end()) {
 		return;
