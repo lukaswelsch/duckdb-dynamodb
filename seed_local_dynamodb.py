@@ -4,19 +4,22 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-dynamo = boto3.resource(
+
+# Set endpoint_url to target DynamoDB Local, or leave as None to hit real AWS DynamoDB
+ENDPOINT_URL = None  # Example: "http://localhost:8000"
+REGION_NAME = "eu-north-1"
+
+session = boto3.Session(region_name=REGION_NAME)
+
+dynamo = session.resource(
     "dynamodb",
-    endpoint_url="http://localhost:8000",
-    region_name="us-east-1",
-    aws_access_key_id="dummy",       # DynamoDB Local ignores credentials
-    aws_secret_access_key="dummy",
+    region_name=REGION_NAME,
+    endpoint_url=ENDPOINT_URL,
 )
-client = boto3.client(
+client = session.client(
     "dynamodb",
-    endpoint_url="http://localhost:8000",
-    region_name="us-east-1",
-    aws_access_key_id="dummy",
-    aws_secret_access_key="dummy",
+    region_name=REGION_NAME,
+    endpoint_url=ENDPOINT_URL,
 )
 
 print("Creating 'orders' table...")

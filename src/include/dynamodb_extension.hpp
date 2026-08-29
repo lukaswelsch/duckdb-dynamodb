@@ -19,6 +19,7 @@ struct DynamoDBSecretConfig {
 	std::string region;
 	std::string endpoint;
 	std::string provider;
+	std::string session_token;
 };
 
 // ─────────────────────────────────────────────

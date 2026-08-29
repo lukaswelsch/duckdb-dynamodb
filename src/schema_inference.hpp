@@ -2,6 +2,8 @@
 
 #include "dynamodb_extension.hpp"
 #include "aws_client.hpp"
+#include "yyjson.hpp"
+
 #include <aws/dynamodb/model/AttributeValue.h>
 #include <string>
 
@@ -19,8 +21,6 @@ LogicalType AttributeTypeToLogical(const Aws::DynamoDB::Model::AttributeValue &a
 		return LogicalType::BOOLEAN;
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::NULLVALUE)
 		return LogicalType::VARCHAR;
-
-	// if (av.GetType() == Aws::DynamoDB::Model::ValueType::ARRAY)   return LogicalType::VARCHAR;
 	if (av.GetType() == Aws::DynamoDB::Model::ValueType::ATTRIBUTE_MAP)
 		return LogicalType::VARCHAR;
 
@@ -45,6 +45,37 @@ std::string AttributeValueToString(const Aws::DynamoDB::Model::AttributeValue &a
 		// For Maps, Lists, Sets — serialize to JSON recursively (simplified here)
 		return "<complex>";
 	}
+}
+
+
+// Helper to convert any DynamoDB AttributeValue recursively into a yyjson node
+duckdb_yyjson::yyjson_mut_val * AttributeValueToYyjson(duckdb_yyjson::yyjson_mut_doc *doc, const Aws::DynamoDB::Model::AttributeValue &av) {
+    switch (av.GetType()) {
+    case Aws::DynamoDB::Model::ValueType::STRING:
+        return yyjson_mut_strcpy(doc, av.GetS().c_str());
+
+    case Aws::DynamoDB::Model::ValueType::NUMBER: {
+        const std::string &num_str = av.GetN();
+        if (num_str.find('.') != std::string::npos) {
+            try {
+                return yyjson_mut_real(doc, std::stod(num_str));
+            } catch (...) {}
+        }
+        try {
+            return yyjson_mut_int(doc, std::stoll(num_str));
+        } catch (...) {}
+        return yyjson_mut_strcpy(doc, num_str.c_str());
+    }
+
+    case Aws::DynamoDB::Model::ValueType::BOOL:
+        return yyjson_mut_bool(doc, av.GetBool());
+
+    case Aws::DynamoDB::Model::ValueType::NULLVALUE:
+        return yyjson_mut_null(doc);
+
+    default:
+        return yyjson_mut_strcpy(doc, "<unsupported>");
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -146,26 +177,43 @@ void AppendItemToChunk(const Aws::Map<Aws::String, Aws::DynamoDB::Model::Attribu
 		auto &col = schema.columns[schema_idx];
 		auto &vec = output.data[out_idx];
 
-		// ── _extra column: build JSON from rare attributes ─────────────────
+		// ── _extra column ─────────────────────────────────────────────────
 		if (col.name == "_extra") {
-			std::string json = "{";
-			bool first = true;
-			for (auto &extra_attr : schema.extra_attrs) {
-				auto it = item.find(Aws::String(extra_attr.c_str()));
+			duckdb_yyjson::yyjson_mut_doc *doc = duckdb_yyjson::yyjson_mut_doc_new(nullptr);
+			duckdb_yyjson::yyjson_mut_val *root = yyjson_mut_obj(doc);
+			yyjson_mut_doc_set_root(doc, root);
+
+			bool has_extra_attrs = false;
+
+			for (const auto &extra_attr : schema.extra_attrs) {
+				Aws::String aws_key(extra_attr.c_str());
+
+				auto it = item.find(aws_key);
 				if (it != item.end()) {
-					if (!first)
-						json += ",";
-					json += "\"" + extra_attr + "\":\"" + AttributeValueToString(it->second) + "\"";
-					
-					first = false;
+					duckdb_yyjson::yyjson_mut_val *val_node = AttributeValueToYyjson(doc, it->second);
+
+					yyjson_mut_obj_add(root, duckdb_yyjson::yyjson_mut_str(doc, extra_attr.c_str()), val_node);
+					has_extra_attrs = true;
 				}
 			}
-			json += "}";
-			if (json == "{}") {
-				FlatVector::SetNull(vec, row, true); // no extra attrs on this item
+
+			if (!has_extra_attrs) {
+				FlatVector::SetNull(vec, row, true);
 			} else {
-				FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, json);
+				size_t len = 0;
+				char *json_str = duckdb_yyjson::yyjson_mut_write(doc, 0, &len);
+
+				if (json_str) {
+					std::string s(json_str, len);
+					FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, s);
+
+					free(json_str);
+				} else {
+					FlatVector::SetNull(vec, row, true);
+				}
 			}
+
+			duckdb_yyjson::yyjson_mut_doc_free(doc);
 			continue;
 		}
 

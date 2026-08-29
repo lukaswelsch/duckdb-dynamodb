@@ -386,6 +386,7 @@ void LoadInternal(ExtensionLoader &loader) {
 	CreateSecretFunction dynamo_secret_fun = {"dynamodb", "credential_chain", CreateDynamoSecret};
 	dynamo_secret_fun.named_parameters["access_key_id"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["secret_access_key"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["session_token"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["region"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["endpoint_url"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["provider"] = LogicalType::VARCHAR;

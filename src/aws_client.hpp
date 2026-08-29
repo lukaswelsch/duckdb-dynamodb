@@ -28,20 +28,32 @@ struct DynamoPage {
 // ─────────────────────────────────────────────
 class AWSClientWrapper {
 public:
-	explicit AWSClientWrapper(const TableConfig &config, const DynamoDBSecretConfig &secret_config) {
+	explicit AWSClientWrapper(
+		const TableConfig &config,
+		const DynamoDBSecretConfig &secret_config) {
+
 		Aws::Client::ClientConfiguration cfg;
 
-		cfg.endpointOverride = config.endpoint_url;
+		if (!config.endpoint_url.empty()) {
+			cfg.endpointOverride = config.endpoint_url;
+		}
 
 		if (!secret_config.region.empty()) {
 			cfg.region = secret_config.region;
 		}
 
-		if (!secret_config.access_key_id.empty() && !secret_config.secret_access_key.empty()) {
-			Aws::Auth::AWSCredentials creds(secret_config.access_key_id, secret_config.secret_access_key);
-			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
+		if (secret_config.provider == "credential_chain") {
+			auto provider = Aws::MakeShared<Aws::Auth::DefaultAWSCredentialsProviderChain>("dynamodb");
+
+			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(provider, cfg);
 		} else {
-			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+			Aws::Auth::AWSCredentials creds(
+				secret_config.access_key_id,
+				secret_config.secret_access_key,
+				secret_config.session_token
+			);
+
+			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
 		}
 	}
 
