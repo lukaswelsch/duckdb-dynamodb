@@ -3,10 +3,10 @@ import random
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
-
+import os
 
 # Set endpoint_url to target DynamoDB Local, or leave as None to hit real AWS DynamoDB
-ENDPOINT_URL = None  # Example: "http://localhost:8000"
+ENDPOINT_URL = os.getenv("DYNAMODB_ENDPOINT_URL")  # Example: "http://localhost:8000"
 REGION_NAME = "eu-north-1"
 
 session = boto3.Session(region_name=REGION_NAME)
