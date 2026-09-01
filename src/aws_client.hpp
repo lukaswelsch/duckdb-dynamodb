@@ -31,17 +31,23 @@ public:
 	explicit AWSClientWrapper(const TableConfig &config, const DynamoDBSecretConfig &secret_config) {
 		Aws::Client::ClientConfiguration cfg;
 
-		cfg.endpointOverride = config.endpoint_url;
+		if (!config.endpoint_url.empty()) {
+			cfg.endpointOverride = config.endpoint_url;
+		}
 
 		if (!secret_config.region.empty()) {
 			cfg.region = secret_config.region;
 		}
 
-		if (!secret_config.access_key_id.empty() && !secret_config.secret_access_key.empty()) {
-			Aws::Auth::AWSCredentials creds(secret_config.access_key_id, secret_config.secret_access_key);
-			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
+		if (secret_config.provider == "credential_chain") {
+			auto provider = Aws::MakeShared<Aws::Auth::DefaultAWSCredentialsProviderChain>("dynamodb");
+
+			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(provider, cfg);
 		} else {
-			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+			Aws::Auth::AWSCredentials creds(secret_config.access_key_id, secret_config.secret_access_key,
+			                                secret_config.session_token);
+
+			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
 		}
 	}
 
@@ -69,9 +75,12 @@ public:
 		req.SetSegment(segment_index);
 		req.SetTotalSegments(total_segments);
 
-		// Projection pushdown — fetch only the columns DuckDB needs
-		if (!projection_cols.empty()) {
-			req.SetProjectionExpression(BuildProjection(projection_cols, expr_attr_names));
+		std::string proj = BuildProjection(projection_cols, expr_attr_names);
+		if (!proj.empty()) {
+			req.SetProjectionExpression(proj);
+		}
+
+		if (!expr_attr_names.empty()) {
 			req.SetExpressionAttributeNames(expr_attr_names);
 		}
 
@@ -87,14 +96,38 @@ public:
 			throw std::runtime_error("Scan failed: " + outcome.GetError().GetMessage());
 		}
 
-		fprintf(stderr, "DYNAMO SCAN: segment=%d/%d → %zu items returned, has_more=%s\n", segment_index, total_segments,
-		        outcome.GetResult().GetItems().size(),
-		        outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
-
 		DynamoPage page;
 		page.items = outcome.GetResult().GetItems();
 		page.next_cursor = outcome.GetResult().GetLastEvaluatedKey(); // empty = done
 		return page;
+	}
+
+	// ── Convert DuckDB Data Types back to DynamoDB Types ───────────────────
+	Aws::DynamoDB::Model::AttributeValue ConvertDuckDBToDynamo(const Value &val) {
+		Aws::DynamoDB::Model::AttributeValue av;
+
+		if (val.IsNull()) {
+			av.SetNull(true);
+			return av;
+		}
+
+		auto &type = val.type();
+
+		if (type == LogicalType::VARCHAR) {
+			av.SetS(val.GetValue<std::string>());
+		} else if (type.IsNumeric()) {
+			av.SetN(val.ToString());
+		} else if (type == LogicalType::BOOLEAN) {
+			av.SetBool(val.GetValue<bool>());
+		} else if (type == LogicalType::BLOB) {
+			auto blob_str = val.GetValueUnsafe<std::string>();
+			av.SetB(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(blob_str.data()), blob_str.size()));
+		} else {
+			// Fallback for timestamps, dates, ..
+			av.SetS(val.ToString());
+		}
+
+		return av;
 	}
 
 	// ── Query — PK/SK key condition, or through a GSI ─────────────────────
@@ -125,28 +158,19 @@ public:
 			req.SetExpressionAttributeNames(expr_attr_names);
 		}
 
-		for (auto &[k, v] : expr_attr_values) {
-			Aws::DynamoDB::Model::AttributeValue av;
-			av.SetS(v); // simplified — real impl handles N, BOOL, L, M, etc.
-			req.AddExpressionAttributeValues(k, av);
+		// Convert DuckDB Values directly to DynamoDB AttributeValues
+		for (const auto &[k, duck_val] : expr_attr_values) {
+			req.AddExpressionAttributeValues(k, ConvertDuckDBToDynamo(duck_val));
 		}
 
 		if (!start_key.empty()) {
 			req.SetExclusiveStartKey(start_key);
 		}
-		std::cout << "Table: " << req.GetTableName() << std::endl;
-		std::cout << "Index: " << req.GetIndexName() << std::endl;
-		std::cout << "KeyConditionExpression: " << req.GetKeyConditionExpression() << std::endl;
-		std::cout << "FilterExpression: " << req.GetFilterExpression() << std::endl;
 
 		auto outcome = client_->Query(req);
 		if (!outcome.IsSuccess()) {
 			throw std::runtime_error("Query failed: " + outcome.GetError().GetMessage());
 		}
-
-		fprintf(stderr, "DYNAMO QUERY: key='%s' → %zu items returned, has_more=%s\n", key_condition_expr.c_str(),
-		        outcome.GetResult().GetItems().size(),
-		        outcome.GetResult().GetLastEvaluatedKey().empty() ? "no" : "yes");
 
 		DynamoPage page;
 		page.items = outcome.GetResult().GetItems();
@@ -194,6 +218,11 @@ private:
 	// Comma-separated projection expression from column names
 	static std::string BuildProjection(const std::vector<std::string> &cols,
 	                                   Aws::Map<Aws::String, Aws::String> &expr_attr_names) {
+		for (const auto &col : cols) {
+			if (col == "_extra") {
+				return "";
+			}
+		}
 		std::string expr;
 		for (const auto &col : cols) {
 			if (col == "_extra")

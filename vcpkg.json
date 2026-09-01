@@ -2,7 +2,7 @@
         "dependencies": [
                 {
                         "name": "aws-sdk-cpp",
-                        "features": ["dynamodb"]
+                        "features": ["dynamodb", "identity-management", "sts", "sso", "cognito-identity"]
                 }
         ],
         "vcpkg-configuration": {

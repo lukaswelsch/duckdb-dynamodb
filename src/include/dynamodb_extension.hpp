@@ -19,6 +19,7 @@ struct DynamoDBSecretConfig {
 	std::string region;
 	std::string endpoint;
 	std::string provider;
+	std::string session_token;
 };
 
 // ─────────────────────────────────────────────
@@ -59,7 +60,6 @@ struct TableConfig {
 	std::string endpoint_url;  // e.g. http://localhost:8000 for DynamoDB Local
 
 	// "infer" : union schema from sample, NULLs for missing attrs
-	// "json"  : single raw JSON column per row (dynamodb_json function)
 	// "hybrid": real columns for common attrs + _extra JSON for the rest
 	std::string schema_mode = "hybrid";
 	double hybrid_threshold = 0.8; // attr must appear in >80% of samples to be a column

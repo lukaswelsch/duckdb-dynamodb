@@ -5,9 +5,67 @@
 # Require statement will ensure this test is run with this extension loaded
 require dynamodb
 
+require json
+
+require-env DYNAMODB_TEST_ENDPOINT
+
 # Confirm the extension works
 query I
-SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE) WHERE status='CANCELLED';
-#SELECT * FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=TRUE, pk=customerId) WHERE customerId='CUST-003';
+create or replace secret dev(type dynamodb);
 ----
 true
+
+# Confirm that it doesn't do a full scan if not allowed
+statement error
+SELECT *
+FROM dynamodb_scan('orders',  endpoint='http://localhost:8000')
+----
+Invalid Input Error: Query on 'orders' requires a full table scan. Pass allow_full_scan=true to proceed (expensive!).
+
+# Check that it works if you allow full scans
+query I
+SELECT COUNT(*)
+FROM dynamodb_scan('orders',  endpoint='http://localhost:8000', allow_full_scan=True)
+----
+2001
+
+# Confirm that the extension works
+query III
+SELECT amount, customerId, orderId
+FROM dynamodb_scan('orders',  endpoint='http://localhost:8000')
+WHERE customerId='test_cust_id'
+AND amount = 350;
+----
+350
+test_cust_id
+1234
+
+# Check that the extra tag is serialized correctly
+query I
+SELECT _extra.tags
+FROM dynamodb_scan('orders', endpoint='http://localhost:8000', allow_full_scan=TRUE)
+WHERE _extra->>'tags' = 'extra_tag'
+LIMIT 1;
+----
+"extra_tag"
+
+# Check that all columns are returned if hybrid_threshold is set to 0
+query IIIIIIII
+SELECT * FROM dynamodb_scan('orders', endpoint='http://localhost:8000', allow_full_scan=TRUE, hybrid_threshold=0)
+WHERE customerId='test_cust_id';
+----
+350.0
+2026-04-01T23:40:53.371863
+test_cust_id
+NULL
+1234
+NULL
+ACTIVE
+extra_tag
+
+
+# Check that only one row is returned if the SK is used on the test cust id
+query I :.*DYNAMODB_SCAN.*1 row.*
+EXPLAIN ANALYZE SELECT * FROM dynamodb_scan('orders', endpoint='http://localhost:8000')
+WHERE customerId='test_cust_id';
+----

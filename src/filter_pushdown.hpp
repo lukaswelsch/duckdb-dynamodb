@@ -96,7 +96,6 @@ PushdownResult TryPushFilter(const std::string &col_name, const TableFilter &fil
 	}
 
 	if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
-		fprintf(stderr, "MatchGSI (%s) \n", col_name.c_str());
 		const GSIConfig *gsi = MatchGSI(col_name, config);
 		if (gsi) {
 			state.index_name = gsi->index_name;
@@ -129,12 +128,7 @@ DynamoOperation ResolveBestOperation(const DynamoBindData &bind_data, DynamoScan
 	bool has_gsi = false;
 
 	for (auto &[col_idx, filter] : filters->filters) {
-		idx_t schema_idx = col_idx;
-		if (col_idx < state.projected_col_indices.size()) {
-			schema_idx = state.projected_col_indices[col_idx];
-		}
-
-		std::string col_name = bind_data.schema.columns[schema_idx].name;
+		std::string col_name = bind_data.schema.columns[col_idx].name;
 
 		PushdownResult r = TryPushFilter(col_name, *filter, bind_data, state);
 

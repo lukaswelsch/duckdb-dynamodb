@@ -9,3 +9,19 @@ or
 ```bash
 make test_debug
 ```
+
+# Running the Tests
+
+The extension requires a DynamoDB instance for testing.
+Set the env var DYNAMODB_TEST_ENDPOINT to 1 to run the tests.
+
+```bash
+pip install boto3
+docker run -d -p 8000:8000 amazon/dynamodb-local  
+python seed_local_dynamodb.py
+```
+
+Then you can run the tests with:
+```bash
+DYNAMODB_TEST_ENDPOINT=1 ./build/release/test/unittest
+```

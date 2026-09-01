@@ -93,7 +93,6 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 					g.sk_name = k.GetAttributeName();
 				}
 			}
-			fprintf(stderr, "Detected GSI pk: %s, sk: %s", g.pk_name.c_str(), g.sk_name.c_str());
 			bind_data->config.gsis.push_back(g);
 		}
 	}
@@ -220,7 +219,6 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	switch (global.operation) {
 	case DynamoOperation::GET_ITEM: {
 		// Extract PK and SK values from pushed key expressions
-		// (simplified — real impl parses expr_attr_values)
 		std::string pk_val = global.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
 		std::string sk_val = global.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
 		DynamoPage local_page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
@@ -334,7 +332,6 @@ void LoadInternal(ExtensionLoader &loader) {
 		for (int i = 0; i < (int)filters.size(); i++) {
 			auto &filter = filters[i];
 			if (GetPKColname(filter) == bind_data.config.pk_name) {
-				std::cout << filter->ToString() << std::endl;
 				bind_data.pk_value = ExtractPKValue(filter);
 				remove_idx = i;
 			} else if (IsGSIFilter(filter, bind_data.config)) {
@@ -353,27 +350,9 @@ void LoadInternal(ExtensionLoader &loader) {
 		if (remove_idx != -1) {
 			filters.erase(filters.begin() + remove_idx);
 		}
-
-		for (auto &filter : filters) {
-			std::cout << "REMAINING----------" << std::endl;
-			std::cout << filter->ToString() << std::endl;
-		}
 	};
 
 	loader.RegisterFunction(scan_func);
-
-	// ── dynamodb_json — raw JSON per row, no schema inference ─────────────
-	// Usage: SELECT raw->>'$.amount' FROM dynamodb_json('orders')
-	TableFunction json_func("dynamodb_json", {LogicalType::VARCHAR},
-	                        DynamoScanFunction, // same scan logic
-	                        DynamoBindFunction, // bind forces schema_mode="json"
-	                        DynamoInitGlobal, DynamoInitLocal);
-
-	json_func.named_parameters = scan_func.named_parameters;
-	json_func.filter_pushdown = true;
-	json_func.projection_pushdown = false; // JSON mode: always fetch full item
-
-	loader.RegisterFunction(json_func);
 
 	// Register Secrets for dynamodb
 	SecretType secret_type;
@@ -386,6 +365,7 @@ void LoadInternal(ExtensionLoader &loader) {
 	CreateSecretFunction dynamo_secret_fun = {"dynamodb", "credential_chain", CreateDynamoSecret};
 	dynamo_secret_fun.named_parameters["access_key_id"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["secret_access_key"] = LogicalType::VARCHAR;
+	dynamo_secret_fun.named_parameters["session_token"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["region"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["endpoint_url"] = LogicalType::VARCHAR;
 	dynamo_secret_fun.named_parameters["provider"] = LogicalType::VARCHAR;
