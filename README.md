@@ -146,7 +146,7 @@ export AWS_ACCESS_KEY_ID='DUMMY'
 export AWS_SECRET_ACCESS_KEY='DUMMY'
 export AWS_DEFAULT_REGION='us-east-1'
 export DYNAMODB_ENDPOINT_URL='http://localhost:8000'
-python seed_local_dynamodb.py
+python test/seed_local_dynamodb.py
 ```
 
 Then you can run the tests with:

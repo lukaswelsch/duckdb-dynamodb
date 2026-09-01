@@ -37,7 +37,8 @@ jobs:
       - name: Seed DynamoDB Mock Data
         run: |
           pip install boto3
-          python seed_local_dynamodb.py
+          DYNAMODB_ENDPOINT_URL: 'http://localhost:8000'
+          python test/seed_local_dynamodb.py
 
       - name: Setup vcpkg
         run: |
