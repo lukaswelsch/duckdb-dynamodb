@@ -219,7 +219,6 @@ static void DynamoScanFunction(ClientContext &ctx, TableFunctionInput &input, Da
 	switch (global.operation) {
 	case DynamoOperation::GET_ITEM: {
 		// Extract PK and SK values from pushed key expressions
-		// (simplified — real impl parses expr_attr_values)
 		std::string pk_val = global.expr_attr_values.at(":" + bind_data.config.pk_name + "val");
 		std::string sk_val = global.expr_attr_values.at(":" + bind_data.config.sk_name + "val");
 		DynamoPage local_page = aws.GetItem(bind_data.config, pk_val, sk_val, needed_cols);
@@ -354,19 +353,6 @@ void LoadInternal(ExtensionLoader &loader) {
 	};
 
 	loader.RegisterFunction(scan_func);
-
-	// ── dynamodb_json — raw JSON per row, no schema inference ─────────────
-	// Usage: SELECT raw->>'$.amount' FROM dynamodb_json('orders')
-	TableFunction json_func("dynamodb_json", {LogicalType::VARCHAR},
-	                        DynamoScanFunction, // same scan logic
-	                        DynamoBindFunction, // bind forces schema_mode="json"
-	                        DynamoInitGlobal, DynamoInitLocal);
-
-	json_func.named_parameters = scan_func.named_parameters;
-	json_func.filter_pushdown = true;
-	json_func.projection_pushdown = false; // JSON mode: always fetch full item
-
-	loader.RegisterFunction(json_func);
 
 	// Register Secrets for dynamodb
 	SecretType secret_type;

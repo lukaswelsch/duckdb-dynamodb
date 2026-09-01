@@ -108,6 +108,42 @@ public:
 		return page;
 	}
 
+	// ── Convert DuckDB Data Types back to DynamoDB Types ───────────────────
+	Aws::DynamoDB::Model::AttributeValue ConvertDuckDBToDynamo(const Value &val) {
+		Aws::DynamoDB::Model::AttributeValue av;
+
+		if (val.IsNull()) {
+			av.SetNull(true);
+			return av;
+		}
+
+		auto &type = val.type();
+
+		if (type == LogicalType::VARCHAR) {
+			av.SetS(val.GetValue<std::string>());
+		}
+		else if (type.IsNumeric()) {
+			av.SetN(val.ToString());
+		}
+		else if (type == LogicalType::BOOLEAN) {
+			av.SetBool(val.GetValue<bool>());
+		}
+		else if (type == LogicalType::BLOB) {
+			auto blob_str = val.GetValueUnsafe<std::string>();
+			av.SetB(Aws::Utils::ByteBuffer(
+				reinterpret_cast<const unsigned char*>(blob_str.data()),
+				blob_str.size()
+			));
+		}
+		else {
+			// Fallback for timestamps, dates, ..
+			av.SetS(val.ToString());
+		}
+
+		return av;
+	}
+
+
 	// ── Query — PK/SK key condition, or through a GSI ─────────────────────
 	DynamoPage Query(const TableConfig &config, const string &key_condition_expr, const string &index_name,
 	                 const std::vector<string> &projection_cols, const unordered_map<string, string> &expr_attr_values,
@@ -136,10 +172,9 @@ public:
 			req.SetExpressionAttributeNames(expr_attr_names);
 		}
 
-		for (auto &[k, v] : expr_attr_values) {
-			Aws::DynamoDB::Model::AttributeValue av;
-			av.SetS(v); // simplified — real impl handles N, BOOL, L, M, etc.
-			req.AddExpressionAttributeValues(k, av);
+		// Convert DuckDB Values directly to DynamoDB AttributeValues
+		for (const auto &[k, duck_val] : expr_attr_values) {
+			req.AddExpressionAttributeValues(k, ConvertDuckDBToDynamo(duck_val));
 		}
 
 		if (!start_key.empty()) {

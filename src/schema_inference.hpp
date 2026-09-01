@@ -90,13 +90,6 @@ duckdb_yyjson::yyjson_mut_val * AttributeValueToYyjson(duckdb_yyjson::yyjson_mut
 //      into a "_extra" JSON VARCHAR column at scan time
 // ─────────────────────────────────────────────
 SchemaInfo InferSchema(AWSClientWrapper &aws, const TableConfig &config) {
-	// ── "json" mode: skip inference, return a single raw JSON column ──────
-	if (config.schema_mode == "json") {
-		SchemaInfo s;
-		s.columns.push_back({"raw", LogicalType::VARCHAR, true});
-		return s;
-	}
-
 	// ── Sample items ───────────────────────────────────────────────────────
 	// We do a small Scan with no filter just to get a representative sample.
 	// For very large tables consider sampling multiple segments.

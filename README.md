@@ -90,12 +90,23 @@ CREATE OR REPLACE SECRET dynamo_secret (
 
 ## Function Reference
 
-There are 2 functions available both scan a DynamoDB table and push PK/SK/GSI predicates to DynamoDB.             
+This extension provides one function that scans a DynamoDB table and pushes PK/SK/GSI predicates to DynamoDB.    
 
-| Function                                              | Description                                                     |
-|-------------------------------------------------------|-----------------------------------------------------------------|
-| `dynamodb_scan(table, [allow_full_scan], [endpoint])`           | Infers schema to create a table.                                |
-| `dynamodb_json(table, [allow_full_scan], [endpoint])` | Does not infer the schema. All data is returned in JSON format. |
+- **table_name ('orders')**: Target DynamoDB table to scan.
+- **endpoint**: Custom connection URL (useful for local development).
+- **allow_full_scan (false / true)**: Safety toggle to prevent accidental unindexed full-table reads.
+- **schema_mode ('hybrid'|'infer')**: Controls how DynamoDB attributes are mapped to data types.
+  - hybrid: attributes must appear in this percent of samples to be a column
+  - infer: same as hybrid=0; all attributes are converted to columns
+- **parallel_segments**: Number of threads to divide and speed up the scan.
+
+dynamodb_scan('orders',
+       endpoint='http://localhost:8000',
+       allow_full_scan=false,
+       schema_mode='hybrid',
+       parallel_segments=8)
+
+
 
 
 ## Limitations
