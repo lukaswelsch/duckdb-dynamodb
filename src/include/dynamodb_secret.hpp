@@ -21,7 +21,11 @@ static void ResolveCredentialChain(CreateSecretInput &input, KeyValueSecret &res
 		profile = profile_it->second.ToString();
 	}
 
+#if defined(_WIN32)
+	_putenv_s("AWS_SDK_LOAD_CONFIG", "1");
+#else
 	setenv("AWS_SDK_LOAD_CONFIG", "1", 1);
+#endif
 
 	Aws::Client::ClientConfiguration client_config;
 	client_config.profileName = profile;

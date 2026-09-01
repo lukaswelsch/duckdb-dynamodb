@@ -7,7 +7,7 @@ import os
 
 # Set endpoint_url to target DynamoDB Local, or leave as None to hit real AWS DynamoDB
 ENDPOINT_URL = os.getenv("DYNAMODB_ENDPOINT_URL")  # Example: "http://localhost:8000"
-REGION_NAME =  os.getenv("AWS_DEFAULT_REGION")
+REGION_NAME = os.getenv("AWS_DEFAULT_REGION")
 
 session = boto3.Session(region_name=REGION_NAME)
 
