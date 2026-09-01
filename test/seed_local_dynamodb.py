@@ -28,13 +28,13 @@ try:
         TableName="orders",
         KeySchema=[
             {"AttributeName": "customerId", "KeyType": "HASH"},
-            {"AttributeName": "orderId",    "KeyType": "RANGE"},
+            {"AttributeName": "orderId", "KeyType": "RANGE"},
         ],
         AttributeDefinitions=[
             {"AttributeName": "customerId", "AttributeType": "S"},
-            {"AttributeName": "orderId",    "AttributeType": "S"},
+            {"AttributeName": "orderId", "AttributeType": "S"},
             # GSI key attributes must be declared here too
-            {"AttributeName": "status",     "AttributeType": "S"},
+            {"AttributeName": "status", "AttributeType": "S"},
         ],
         GlobalSecondaryIndexes=[
             {
@@ -55,24 +55,24 @@ except client.exceptions.ResourceInUseException:
 # Intentionally heterogeneous: some rows have extra rare attributes
 # to exercise the hybrid schema / _extra column logic.
 
-STATUSES    = ["PENDING", "SHIPPED", "DELIVERED", "CANCELLED"]
-CUSTOMERS   = [f"CUST-{i:03d}" for i in range(1, 11)]
+STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELLED"]
+CUSTOMERS = [f"CUST-{i:03d}" for i in range(1, 11)]
 
 print("Seeding 200 rows (heterogeneous schema)...")
 with table.batch_writer() as batch:
     for i in range(2000):
         customer_id = random.choice(CUSTOMERS)
-        order_id    = str(uuid.uuid4())
-        status      = random.choice(STATUSES)
-        amount      = Decimal(str(round(random.uniform(10, 500), 2)))
-        created_at  = (datetime.now() - timedelta(days=random.randint(0, 365))).isoformat()
+        order_id = str(uuid.uuid4())
+        status = random.choice(STATUSES)
+        amount = Decimal(str(round(random.uniform(10, 500), 2)))
+        created_at = (datetime.now() - timedelta(days=random.randint(0, 365))).isoformat()
 
         item = {
             "customerId": customer_id,
-            "orderId":    order_id,
-            "status":     status,
-            "amount":     amount,
-            "createdAt":  created_at,
+            "orderId": order_id,
+            "status": status,
+            "amount": amount,
+            "createdAt": created_at,
         }
 
         # ~20% of rows have a 'tags' attribute (rare → should land in _extra)
@@ -87,20 +87,21 @@ with table.batch_writer() as batch:
         if random.random() < 0.05:
             item["shippingAddress"] = {
                 "street": f"{random.randint(1,999)} Main St",
-                "city":   "Berlin",
-                "zip":    str(random.randint(10000, 99999)),
+                "city": "Berlin",
+                "zip": str(random.randint(10000, 99999)),
             }
 
         batch.put_item(Item=item)
 
-    batch.put_item({
-        "customerId": "test_cust_id",
-        "orderId":    "1234",
-        "status":     "ACTIVE",
-        "amount":     Decimal("350.00"),
-        "createdAt":  "2026-04-01T23:40:53.371863",
-        "tags":       "extra_tag",
-    }
+    batch.put_item(
+        {
+            "customerId": "test_cust_id",
+            "orderId": "1234",
+            "status": "ACTIVE",
+            "amount": Decimal("350.00"),
+            "createdAt": "2026-04-01T23:40:53.371863",
+            "tags": "extra_tag",
+        }
     )
 
 print("rows seeded")
