@@ -62,3 +62,10 @@ NULL
 NULL
 ACTIVE
 extra_tag
+
+
+# Check that only one row is returned if the SK is used on the test cust id
+query I :.*DYNAMODB_SCAN.*1 row.*
+EXPLAIN ANALYZE SELECT * FROM dynamodb_scan('orders', endpoint='http://localhost:8000')
+WHERE customerId='test_cust_id';
+----
