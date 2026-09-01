@@ -47,35 +47,37 @@ std::string AttributeValueToString(const Aws::DynamoDB::Model::AttributeValue &a
 	}
 }
 
-
 // Helper to convert any DynamoDB AttributeValue recursively into a yyjson node
-duckdb_yyjson::yyjson_mut_val * AttributeValueToYyjson(duckdb_yyjson::yyjson_mut_doc *doc, const Aws::DynamoDB::Model::AttributeValue &av) {
-    switch (av.GetType()) {
-    case Aws::DynamoDB::Model::ValueType::STRING:
-        return yyjson_mut_strcpy(doc, av.GetS().c_str());
+duckdb_yyjson::yyjson_mut_val *AttributeValueToYyjson(duckdb_yyjson::yyjson_mut_doc *doc,
+                                                      const Aws::DynamoDB::Model::AttributeValue &av) {
+	switch (av.GetType()) {
+	case Aws::DynamoDB::Model::ValueType::STRING:
+		return yyjson_mut_strcpy(doc, av.GetS().c_str());
 
-    case Aws::DynamoDB::Model::ValueType::NUMBER: {
-        const std::string &num_str = av.GetN();
-        if (num_str.find('.') != std::string::npos) {
-            try {
-                return yyjson_mut_real(doc, std::stod(num_str));
-            } catch (...) {}
-        }
-        try {
-            return yyjson_mut_int(doc, std::stoll(num_str));
-        } catch (...) {}
-        return yyjson_mut_strcpy(doc, num_str.c_str());
-    }
+	case Aws::DynamoDB::Model::ValueType::NUMBER: {
+		const std::string &num_str = av.GetN();
+		if (num_str.find('.') != std::string::npos) {
+			try {
+				return yyjson_mut_real(doc, std::stod(num_str));
+			} catch (...) {
+			}
+		}
+		try {
+			return yyjson_mut_int(doc, std::stoll(num_str));
+		} catch (...) {
+		}
+		return yyjson_mut_strcpy(doc, num_str.c_str());
+	}
 
-    case Aws::DynamoDB::Model::ValueType::BOOL:
-        return yyjson_mut_bool(doc, av.GetBool());
+	case Aws::DynamoDB::Model::ValueType::BOOL:
+		return yyjson_mut_bool(doc, av.GetBool());
 
-    case Aws::DynamoDB::Model::ValueType::NULLVALUE:
-        return yyjson_mut_null(doc);
+	case Aws::DynamoDB::Model::ValueType::NULLVALUE:
+		return yyjson_mut_null(doc);
 
-    default:
-        return yyjson_mut_strcpy(doc, "<unsupported>");
-    }
+	default:
+		return yyjson_mut_strcpy(doc, "<unsupported>");
+	}
 }
 
 // ─────────────────────────────────────────────

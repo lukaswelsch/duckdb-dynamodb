@@ -28,10 +28,7 @@ struct DynamoPage {
 // ─────────────────────────────────────────────
 class AWSClientWrapper {
 public:
-	explicit AWSClientWrapper(
-		const TableConfig &config,
-		const DynamoDBSecretConfig &secret_config) {
-
+	explicit AWSClientWrapper(const TableConfig &config, const DynamoDBSecretConfig &secret_config) {
 		Aws::Client::ClientConfiguration cfg;
 
 		if (!config.endpoint_url.empty()) {
@@ -47,11 +44,8 @@ public:
 
 			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(provider, cfg);
 		} else {
-			Aws::Auth::AWSCredentials creds(
-				secret_config.access_key_id,
-				secret_config.secret_access_key,
-				secret_config.session_token
-			);
+			Aws::Auth::AWSCredentials creds(secret_config.access_key_id, secret_config.secret_access_key,
+			                                secret_config.session_token);
 
 			client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(creds, cfg);
 		}
@@ -121,28 +115,20 @@ public:
 
 		if (type == LogicalType::VARCHAR) {
 			av.SetS(val.GetValue<std::string>());
-		}
-		else if (type.IsNumeric()) {
+		} else if (type.IsNumeric()) {
 			av.SetN(val.ToString());
-		}
-		else if (type == LogicalType::BOOLEAN) {
+		} else if (type == LogicalType::BOOLEAN) {
 			av.SetBool(val.GetValue<bool>());
-		}
-		else if (type == LogicalType::BLOB) {
+		} else if (type == LogicalType::BLOB) {
 			auto blob_str = val.GetValueUnsafe<std::string>();
-			av.SetB(Aws::Utils::ByteBuffer(
-				reinterpret_cast<const unsigned char*>(blob_str.data()),
-				blob_str.size()
-			));
-		}
-		else {
+			av.SetB(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(blob_str.data()), blob_str.size()));
+		} else {
 			// Fallback for timestamps, dates, ..
 			av.SetS(val.ToString());
 		}
 
 		return av;
 	}
-
 
 	// ── Query — PK/SK key condition, or through a GSI ─────────────────────
 	DynamoPage Query(const TableConfig &config, const string &key_condition_expr, const string &index_name,

@@ -14,7 +14,8 @@ static void ResolveCredentialChain(CreateSecretInput &input, KeyValueSecret &res
 		return;
 	}
 
-	string profile; auto profile_it = input.options.find("profile");
+	string profile;
+	auto profile_it = input.options.find("profile");
 
 	if (profile_it != input.options.end()) {
 		profile = profile_it->second.ToString();
