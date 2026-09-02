@@ -18,7 +18,11 @@ Set the env var DYNAMODB_TEST_ENDPOINT to 1 to run the tests.
 ```bash
 pip install boto3
 docker run -d -p 8000:8000 amazon/dynamodb-local  
-python seed_local_dynamodb.py
+export AWS_ACCESS_KEY_ID='DUMMY'
+export AWS_SECRET_ACCESS_KEY='DUMMY'
+export AWS_DEFAULT_REGION='us-east-1'
+export DYNAMODB_ENDPOINT_URL='http://localhost:8000'
+python test/seed_local_dynamodb.py
 ```
 
 Then you can run the tests with:
