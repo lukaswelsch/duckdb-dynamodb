@@ -95,10 +95,12 @@ This extension provides one function that scans a DynamoDB table and pushes PK/S
 - **table_name ('orders')**: Target DynamoDB table to scan.
 - **endpoint**: Custom connection URL (useful for local development).
 - **allow_full_scan (false / true)**: Safety toggle to prevent accidental unindexed full-table reads.
-- **schema_mode ('hybrid'|'infer')**: Controls how DynamoDB attributes are mapped to data types.
-  - hybrid: attributes must appear in this percent of samples to be a column
-  - infer: same as hybrid=0; all attributes are converted to columns
 - **parallel_segments**: Number of threads to divide and speed up the scan.
+- **schema_mode ('hybrid'|'infer')**: Controls how DynamoDB attributes are mapped to data types.
+    - hybrid (default): activates the hybrid mode, in which rare attributes are stored in an _extra JSON column.
+    - infer: same as hybrid_threshold=0; all attributes are converted to columns
+- **hybrid_threshold (0.8)**: Attributes must appear in this percent of samples to be a column
+- **sample_size (200)**: How many rows should be checked to infer the schema from.
 
 dynamodb_scan('orders',
        endpoint='http://localhost:8000',

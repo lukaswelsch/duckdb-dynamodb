@@ -43,14 +43,11 @@ static TableConfig ParseTableConfig(const std::string &table_name, const named_p
 
 	cfg.endpoint_url = get_str("endpoint", "");
 	cfg.schema_mode = get_str("schema_mode", "hybrid");
-	cfg.pk_name = get_str("pk", "");
-	cfg.sk_name = get_str("sk", "");
 	cfg.allow_full_scan = get_bool("allow_full_scan", false);
 	cfg.parallel_segments = get_int("parallel_segments", 4);
 	cfg.sample_size = get_int("sample_size", 200);
 	cfg.hybrid_threshold =
 	    get_str("hybrid_threshold", "0.8").empty() ? 0.8 : std::stod(get_str("hybrid_threshold", "0.8"));
-	cfg.secret_name = get_str("secret_name", "");
 
 	return cfg;
 }
@@ -72,29 +69,27 @@ static unique_ptr<FunctionData> DynamoBindFunction(ClientContext &ctx, TableFunc
 	bind_data->aws_client = make_shared_ptr<AWSClientWrapper>(bind_data->config, bind_data->secret_config);
 
 	// Auto-discover PK/SK from DescribeTable if not provided by user
-	if (bind_data->config.pk_name.empty()) {
-		auto desc = bind_data->aws_client->DescribeTable(table_name);
-		auto &key_schema = desc.GetTable().GetKeySchema();
-		for (auto &key : key_schema) {
-			if (key.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
-				bind_data->config.pk_name = key.GetAttributeName();
+	auto desc = bind_data->aws_client->DescribeTable(table_name);
+	auto &key_schema = desc.GetTable().GetKeySchema();
+	for (auto &key : key_schema) {
+		if (key.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
+			bind_data->config.pk_name = key.GetAttributeName();
+		} else {
+			bind_data->config.sk_name = key.GetAttributeName();
+		}
+	}
+	// Also load GSI definitions
+	for (auto &gsi : desc.GetTable().GetGlobalSecondaryIndexes()) {
+		GSIConfig g;
+		g.index_name = gsi.GetIndexName();
+		for (auto &k : gsi.GetKeySchema()) {
+			if (k.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
+				g.pk_name = k.GetAttributeName();
 			} else {
-				bind_data->config.sk_name = key.GetAttributeName();
+				g.sk_name = k.GetAttributeName();
 			}
 		}
-		// Also load GSI definitions
-		for (auto &gsi : desc.GetTable().GetGlobalSecondaryIndexes()) {
-			GSIConfig g;
-			g.index_name = gsi.GetIndexName();
-			for (auto &k : gsi.GetKeySchema()) {
-				if (k.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
-					g.pk_name = k.GetAttributeName();
-				} else {
-					g.sk_name = k.GetAttributeName();
-				}
-			}
-			bind_data->config.gsis.push_back(g);
-		}
+		bind_data->config.gsis.push_back(g);
 	}
 
 	// Infer or construct schema
@@ -307,9 +302,6 @@ void LoadInternal(ExtensionLoader &loader) {
 
 	// Named parameters
 	scan_func.named_parameters["endpoint"] = LogicalType::VARCHAR;
-	scan_func.named_parameters["secret_name"] = LogicalType::VARCHAR;
-	scan_func.named_parameters["pk"] = LogicalType::VARCHAR;
-	scan_func.named_parameters["sk"] = LogicalType::VARCHAR;
 	scan_func.named_parameters["allow_full_scan"] = LogicalType::BOOLEAN;
 	scan_func.named_parameters["parallel_segments"] = LogicalType::INTEGER;
 	scan_func.named_parameters["sample_size"] = LogicalType::INTEGER;
